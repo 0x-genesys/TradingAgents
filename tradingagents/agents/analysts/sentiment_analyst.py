@@ -5,13 +5,15 @@ the old version had a prompt that demanded social-media analysis but the
 only tool available was Yahoo Finance news — which led LLMs to fabricate
 Reddit/X/StockTwits content under prompt pressure (verified live).
 
-The redesigned agent pre-fetches three complementary data sources before
+The redesigned agent pre-fetches five complementary data sources before
 the LLM is invoked and injects them into the prompt as structured blocks:
 
-  1. News headlines     — Yahoo Finance (institutional framing)
-  2. StockTwits messages — retail-trader posts indexed by cashtag, with
-                           user-labeled Bullish/Bearish sentiment tags
-  3. Reddit posts        — r/wallstreetbets, r/stocks, r/investing
+  1. News headlines      — Yahoo Finance (institutional framing)
+  2. StockTwits messages  — retail-trader posts indexed by cashtag, with
+                            user-labeled Bullish/Bearish sentiment tags
+  3. Reddit posts         — r/wallstreetbets, r/stocks, r/investing
+  4. Telegram messages    — Indian stock-discussion channels (Telethon)
+  5. Google Trends        — retail-attention signal via search interest
 
 The agent does not use tool-calling; the data is in the prompt from
 turn 0. The LLM produces the sentiment report in a single invocation.
@@ -29,6 +31,8 @@ from tradingagents.agents.utils.agent_utils import (
 )
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
+from tradingagents.dataflows.telegram import fetch_telegram_messages
+from tradingagents.dataflows.google_trends import fetch_google_trends
 
 
 def _seven_days_back(trade_date: str) -> str:
@@ -38,9 +42,9 @@ def _seven_days_back(trade_date: str) -> str:
 def create_sentiment_analyst(llm):
     """Create a sentiment analyst node for the trading graph.
 
-    Pre-fetches news + StockTwits + Reddit data, injects them into the
-    prompt as structured blocks, and produces a sentiment report in a
-    single LLM call.
+    Pre-fetches news + StockTwits + Reddit + Telegram + Google Trends data,
+    injects them into the prompt as structured blocks, and produces a
+    sentiment report in a single LLM call.
     """
 
     def sentiment_analyst_node(state):
@@ -49,12 +53,14 @@ def create_sentiment_analyst(llm):
         start_date = _seven_days_back(end_date)
         instrument_context = build_instrument_context(ticker)
 
-        # Pre-fetch all three sources. Each fetcher degrades gracefully and
+        # Pre-fetch all five sources. Each fetcher degrades gracefully and
         # returns a string (no exceptions surface from here), so the LLM
         # always sees something — either real data or a clear placeholder.
         news_block = get_news.func(ticker, start_date, end_date)
         stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
         reddit_block = fetch_reddit_posts(ticker)
+        telegram_block = fetch_telegram_messages(ticker)
+        trends_block = fetch_google_trends(ticker)
 
         ctx = state.get("trade_context_note", "")
 
@@ -65,6 +71,8 @@ def create_sentiment_analyst(llm):
             news_block=news_block,
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
+            telegram_block=telegram_block,
+            trends_block=trends_block,
             trade_context_note=ctx,
         )
 
@@ -107,6 +115,8 @@ def _build_system_message(
     news_block: str,
     stocktwits_block: str,
     reddit_block: str,
+    telegram_block: str,
+    trends_block: str,
     trade_context_note: str = "",
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
@@ -116,7 +126,7 @@ def _build_system_message(
         if trade_context_note
         else ""
     )
-    return ctx_line + f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
+    return ctx_line + f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on five complementary data sources that have already been collected for you.
 
 ## Data sources (pre-fetched, in this prompt)
 
@@ -141,30 +151,48 @@ Community discussion. Engagement signal via upvote score and comment count. Subr
 {reddit_block}
 <end_of_reddit>
 
+### Telegram messages — Indian stock-discussion channels (past 7 days)
+Fast-moving retail signal from Indian investors on Telegram. Messages from active stock-call channels with timestamps and preview text. Chats are often call-oriented (target/stop-loss posts); look for recurring bullish or bearish themes.
+
+<start_of_telegram>
+{telegram_block}
+<end_of_telegram>
+
+### Google Trends — search-interest data (past 7 days)
+Quantitative attention signal. Score is 0–100 (100 = peak popularity). Direction (RISING / FALLING / STABLE) shows whether retail awareness is accelerating. High scores (≥75) suggest FOMO or panic signals; low scores (<25) suggest purely institutional movement.
+
+<start_of_google_trends>
+{trends_block}
+<end_of_google_trends>
+
 ## How to analyze this data (best practices)
 
 1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone.
 
-2. **Look for cross-source divergences.** If news framing is bearish but StockTwits is overwhelmingly bullish, that mismatch is itself a signal — it can mean retail is leaning into a thesis the news flow hasn't caught up to (or vice versa, that retail is chasing while institutions are cautious).
+2. **Look for cross-source divergences.** If news framing is bearish but Telegram/StockTwits is overwhelmingly bullish, that mismatch is itself a signal — it can mean retail is leaning into a thesis the news flow hasn't caught up to (or vice versa).
 
 3. **Weight Reddit posts by engagement.** A 400-upvote / 200-comment thread reflects community attention; a 3-upvote post is noise. Read the body excerpts for context — the title alone often misleads.
 
-4. **Distinguish opinion from event.** A news headline ("Nvidia announces $500M Corning deal") is an event; a StockTwits post ("buying NVDA, this is going to moon") is opinion. Both are inputs but should be weighted differently in your conclusions.
+4. **Read Telegram for Indian-specific retail tone.** Telegram groups often share stock calls with specific price targets and stop-loss levels. A stock appearing across multiple channels with consistent targets is a stronger signal than a one-off mention.
 
-5. **Identify recurring narrative themes.** What topic keeps coming up across sources? That's the dominant narrative driving current sentiment.
+5. **Use Google Trends to validate retail attention.** If search interest is RISING above 50 but the stock hasn't moved yet, it may be a leading indicator. If it's FALLING from a high, retail attention is cooling. If it's below 25, retail isn't watching.
 
-6. **Be honest about data limits.** If StockTwits returned only a handful of messages, or one or more sources returned an "<unavailable>" placeholder, the sentiment read is less robust — flag this caveat explicitly. If the sources are silent on a given subreddit, say so.
+6. **Distinguish opinion from event.** A news headline ("NTPC announces new solar park") is an event; a Telegram message ("NTPC target 400 🚀") is opinion. Both are inputs but should be weighted differently in your conclusions.
 
-7. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
+7. **Identify recurring narrative themes.** What topic keeps coming up across sources? That's the dominant narrative driving current sentiment.
 
-8. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call.
+8. **Be honest about data limits.** If StockTwits returned only a handful of messages, or one or more sources returned an "<unavailable>" placeholder, the sentiment read is less robust — flag this caveat explicitly. If the sources are silent on a given subreddit or channel, say so.
+
+9. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
+
+10. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call.
 
 ## Output
 
 Produce a sentiment report covering, in order:
 
 1. **Overall sentiment direction** — Bullish / Bearish / Neutral / Mixed — with a brief confidence note based on data quality and sample size.
-2. **Source-by-source breakdown** — what each of news / StockTwits / Reddit is telling you, with specific evidence (cite message counts, ratios, notable posts).
+2. **Source-by-source breakdown** — what each of news / StockTwits / Reddit / Telegram / Google Trends is telling you, with specific evidence (cite message counts, ratios, notable posts).
 3. **Divergences, alignments, and key narratives** across sources.
 4. **Catalysts and risks** surfaced by the data.
 5. **Markdown table** at the end summarizing key sentiment signals, their direction, source, and supporting evidence.
