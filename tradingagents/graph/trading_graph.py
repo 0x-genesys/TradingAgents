@@ -292,7 +292,11 @@ class TradingAgentsGraph:
         if updates:
             self.memory_log.batch_update_with_outcomes(updates)
 
-    def propagate(self, company_name, trade_date, asset_type: str = "stock"):
+    def propagate(self, company_name, trade_date, asset_type: str = "stock",
+                  trade_horizon_days: Optional[int] = None,
+                  entry_price: Optional[float] = None,
+                  stop_loss_pct: Optional[float] = None,
+                  trade_strategy: Optional[str] = None):
         """Run the trading agents graph for a company on a specific date.
 
         ``asset_type`` selects between the stock pipeline (default) and the
@@ -301,6 +305,11 @@ class TradingAgentsGraph:
         ``checkpoint_enabled`` is set in config, the graph is recompiled with
         a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
+
+        Optional trade context params (``trade_horizon_days``, ``entry_price``,
+        ``stop_loss_pct``, ``trade_strategy``) are passed through to all analysts
+        so they can frame their analysis for the specific trade horizon. When
+        omitted (None), the default long-term analysis is used unchanged.
         """
         self.ticker = company_name
 
@@ -326,19 +335,33 @@ class TradingAgentsGraph:
                 logger.info("Starting fresh for %s on %s", company_name, trade_date)
 
         try:
-            return self._run_graph(company_name, trade_date, asset_type=asset_type)
+            return self._run_graph(
+                company_name, trade_date, asset_type=asset_type,
+                trade_horizon_days=trade_horizon_days,
+                entry_price=entry_price,
+                stop_loss_pct=stop_loss_pct,
+                trade_strategy=trade_strategy,
+            )
         finally:
             if self._checkpointer_ctx is not None:
                 self._checkpointer_ctx.__exit__(None, None, None)
                 self._checkpointer_ctx = None
                 self.graph = self.workflow.compile()
 
-    def _run_graph(self, company_name, trade_date, asset_type: str = "stock"):
+    def _run_graph(self, company_name, trade_date, asset_type: str = "stock",
+                   trade_horizon_days: Optional[int] = None,
+                   entry_price: Optional[float] = None,
+                   stop_loss_pct: Optional[float] = None,
+                   trade_strategy: Optional[str] = None):
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM.
         past_context = self.memory_log.get_past_context(company_name)
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date, asset_type=asset_type, past_context=past_context
+            company_name, trade_date, asset_type=asset_type, past_context=past_context,
+            trade_horizon_days=trade_horizon_days,
+            entry_price=entry_price,
+            stop_loss_pct=stop_loss_pct,
+            trade_strategy=trade_strategy,
         )
         args = self.propagator.get_graph_args()
 

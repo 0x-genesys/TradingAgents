@@ -39,7 +39,10 @@ def create_portfolio_manager(llm):
             else ""
         )
 
-        prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
+        ctx = state.get("trade_context_note", "")
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nRate this as a SHORT-TERM trade, not a long-term investment. Valuation multiples (P/E, EV/EBITDA) are largely irrelevant for this duration. The question is: does this trade work within the given horizon and stop-loss?" if ctx else ""
+
+        prompt = f"""{ctx_line}As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
 {instrument_context}
 

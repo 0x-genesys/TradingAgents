@@ -26,11 +26,15 @@ def create_trader(llm):
         instrument_context = build_instrument_context(company_name, asset_type)
         investment_plan = state["investment_plan"]
 
+        ctx = state.get("trade_context_note", "")
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nEvaluate whether the GIVEN entry/stop parameters work for the GIVEN horizon. The entry price and stop loss are constraints — assess viability, not set ideal levels." if ctx else ""
+
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are a trading agent analyzing market data to make investment decisions. "
+                    ctx_line
+                    + "You are a trading agent analyzing market data to make investment decisions. "
                     "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
                     "Anchor your reasoning in the analysts' reports and the research plan."
                     + get_language_instruction()
