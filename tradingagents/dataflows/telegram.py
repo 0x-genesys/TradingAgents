@@ -85,6 +85,12 @@ def fetch_telegram_messages(
     Returns a placeholder string on any failure — the caller never has to
     special-case None or exceptions.
     """
+    enabled = os.environ.get("TELEGRAM_ENABLED", "").strip().lower()
+    if enabled != "true":
+        return (
+            "<Telegram disabled: set TELEGRAM_ENABLED=true in .env to enable>"
+        )
+
     api_id = os.environ.get("TELEGRAM_API_ID", "").strip()
     api_hash = os.environ.get("TELEGRAM_API_HASH", "").strip()
 

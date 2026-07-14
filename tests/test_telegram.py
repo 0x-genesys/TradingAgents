@@ -64,11 +64,14 @@ class TelegramFetchWithoutCredsTests(unittest.TestCase):
     must return a friendly placeholder rather than crashing."""
 
     def setUp(self):
-        # Ensure the env vars are absent for these tests
+        # Ensure TELEGRAM_ENABLED is not set for these tests
+        self._old_enabled = os.environ.pop("TELEGRAM_ENABLED", None)
         self._old_id = os.environ.pop("TELEGRAM_API_ID", None)
         self._old_hash = os.environ.pop("TELEGRAM_API_HASH", None)
 
     def tearDown(self):
+        if self._old_enabled is not None:
+            os.environ["TELEGRAM_ENABLED"] = self._old_enabled
         if self._old_id is not None:
             os.environ["TELEGRAM_API_ID"] = self._old_id
         if self._old_hash is not None:
@@ -78,10 +81,11 @@ class TelegramFetchWithoutCredsTests(unittest.TestCase):
         """Must return a placeholder string, not crash."""
         result = fetch_telegram_messages("NTPC.NS")
         self.assertIsInstance(result, str)
-        self.assertIn("Telegram unavailable", result)
+        self.assertIn("Telegram disabled", result)
 
     def test_placeholder_with_empty_creds(self):
         """Empty-string creds should also produce a placeholder."""
+        os.environ["TELEGRAM_ENABLED"] = "true"
         os.environ["TELEGRAM_API_ID"] = ""
         os.environ["TELEGRAM_API_HASH"] = ""
         result = fetch_telegram_messages("NTPC.NS")
@@ -90,6 +94,7 @@ class TelegramFetchWithoutCredsTests(unittest.TestCase):
 
     def test_placeholder_with_bad_api_id(self):
         """Non-numeric API_ID should produce an informative placeholder."""
+        os.environ["TELEGRAM_ENABLED"] = "true"
         os.environ["TELEGRAM_API_ID"] = "not-a-number"
         os.environ["TELEGRAM_API_HASH"] = "abc123"
         result = fetch_telegram_messages("NTPC.NS")
@@ -110,9 +115,11 @@ class TelegramIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.api_id = os.environ.get("TELEGRAM_API_ID", "").strip()
         self.api_hash = os.environ.get("TELEGRAM_API_HASH", "").strip()
-        if not self.api_id or not self.api_hash:
+        self.enabled = os.environ.get("TELEGRAM_ENABLED", "").strip().lower()
+        if not self.api_id or not self.api_hash or self.enabled != "true":
             self.skipTest(
-                "TELEGRAM_API_ID / TELEGRAM_API_HASH not set — skipping integration test"
+                "TELEGRAM_ENABLED=true + TELEGRAM_API_ID / TELEGRAM_API_HASH "
+                "not all set — skipping integration test"
             )
 
     def test_fetch_recent_for_ntpc(self):
