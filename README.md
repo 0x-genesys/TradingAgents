@@ -259,7 +259,16 @@ boundary, and any invented upstream-model claim is removed and tagged
 to the exact graph instrument. An attempted symbol typo is corrected before the
 tool executes and tagged `CORRECTED_TOOL_TICKER`.
 
-Telegram is non-interactive during scheduled runs. Configure
+For stocks, the News Analyst and Sentiment Analyst consume the same frozen Yahoo
+Finance and India-localized Google News blocks. The News Analyst does not run a
+second ticker-news search. It may fetch global news only for horizon-relevant
+macro context. A ticker-news contradiction gets one grounded rewrite attempt;
+a second failure produces a deterministic frozen-news digest tagged
+`INVALID_NEWS_REPORT` and `FALLBACK_NEWS_DIGEST`.
+
+Telegram is paused and disabled by default. Scheduled runs exit before Telegram
+credentials, client imports, or network access unless `TELEGRAM_ENABLED=true` is
+explicitly configured. To enable it later, configure
 `TELEGRAM_ENABLED=true`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, and an already
 authorized `TELEGRAM_SESSION_FILE`. Use `TELEGRAM_CHANNELS` for a comma-separated
 channel override. Missing Telegram access never blocks or changes the direction

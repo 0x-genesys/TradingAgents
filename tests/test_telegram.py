@@ -16,7 +16,6 @@ from unittest.mock import patch
 import pytest
 
 from tradingagents.dataflows.telegram import (
-    INDIAN_CHANNELS,
     _get_company_name,
     _search_terms,
     fetch_telegram_messages,
@@ -82,6 +81,18 @@ class TelegramFetchWithoutCredsTests(unittest.TestCase):
         result = fetch_telegram_messages("NTPC.NS")
         self.assertIsInstance(result, str)
         self.assertIn("Telegram disabled", result)
+
+    @patch("tradingagents.dataflows.telegram._sync_fetch")
+    def test_disabled_gate_prevents_network_even_with_credentials(self, sync_fetch):
+        """Paused Telegram must not reach its network path."""
+        os.environ["TELEGRAM_ENABLED"] = "false"
+        os.environ["TELEGRAM_API_ID"] = "12345"
+        os.environ["TELEGRAM_API_HASH"] = "configured-but-paused"
+
+        result = fetch_telegram_messages("NTPC.NS")
+
+        self.assertIn("Telegram disabled", result)
+        sync_fetch.assert_not_called()
 
     def test_placeholder_with_empty_creds(self):
         """Empty-string creds should also produce a placeholder."""
