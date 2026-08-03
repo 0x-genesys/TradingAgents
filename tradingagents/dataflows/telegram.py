@@ -1,34 +1,20 @@
-"""Telegram channel fetcher for Indian stock discussion.
+"""Optional Telegram enrichment for Indian stock discussion.
 
-Uses Telethon (MTProto) to fetch messages from public Indian stock-related
-Telegram channels/chats, searching by company name for best results.
-
-Setup:
-  1. Create a Telegram API app at https://my.telegram.org/apps (free, instant)
-  2. Set TELEGRAM_API_ID and TELEGRAM_API_HASH in your .env
-  3. (Optional) Set TELEGRAM_SESSION_FILE for a persistent session file.
-     On first run Telethon prompts for phone number + verification code.
-     The session file caches the auth so subsequent runs are automatic.
-
-Source channels are configurable via the ``INDIAN_CHANNELS`` constant or
-the ``telegram_channels`` parameter to ``fetch_telegram_messages()``.
+The fetch is bounded, date-aware, and non-interactive. Authentication must be
+completed separately so a scheduled run can never pause for a phone or OTP.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
-import os
-import re
 import contextlib
 import io
+import logging
+import os
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Well-known Indian stock-discussion Telegram channels / groups.
-# Public channels can be joined by their @username.
 INDIAN_CHANNELS = (
     "StockMarketFactory",
     "TradeFunda",
@@ -41,36 +27,37 @@ _MAX_MESSAGES_PER_CHANNEL = 20
 
 
 def _get_company_name(ticker: str, timeout: float = 5.0) -> str:
-    """Look up the company name for a ticker via yfinance (short timeout)."""
+    """Look up the company name for a ticker via yfinance."""
+    del timeout
     try:
         import yfinance as yf
 
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
             io.StringIO()
         ):
-            t = yf.Ticker(ticker)
-            info = t.info or {}
+            info = yf.Ticker(ticker).info or {}
         return (info.get("longName") or info.get("shortName") or "").strip()
     except Exception:
         return ""
 
 
-def _search_terms(ticker: str) -> list[str]:
-    """Build a list of search terms to look for in Telegram messages.
-
-    Returns the company name (when available) and the bare ticker symbol
-    so we catch both institutional discussion and ticker-specific chatter.
-    """
-    company = _get_company_name(ticker)
+def _search_terms(ticker: str, company_name: str | None = None) -> list[str]:
+    """Return distinct company, ticker, hashtag, and cashtag search terms."""
+    company = (company_name or _get_company_name(ticker)).strip()
     base = ticker.upper().replace(".NS", "").replace(".BO", "")
-    terms = []
-    if company and len(company) > 2:
-        terms.append(company)
-    if base and base != company:
-        terms.append(base)
-    if not terms:
-        terms.append(base)
-    return terms
+    candidates = [company, base, f"#{base}", f"${base}"]
+    terms: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate.casefold() not in {item.casefold() for item in terms}:
+            terms.append(candidate)
+    return terms or [base]
+
+
+def _configured_channels(channels: tuple[str, ...]) -> tuple[str, ...]:
+    raw = os.environ.get("TELEGRAM_CHANNELS", "").strip()
+    if not raw:
+        return channels
+    return tuple(value.strip().lstrip("@") for value in raw.split(",") if value.strip())
 
 
 def fetch_telegram_messages(
@@ -78,41 +65,44 @@ def fetch_telegram_messages(
     channels: tuple[str, ...] = INDIAN_CHANNELS,
     limit_per_channel: int = _MAX_MESSAGES_PER_CHANNEL,
     max_days: int = _SEARCH_WINDOW_DAYS,
+    *,
+    as_of_date: str | None = None,
+    company_name: str | None = None,
 ) -> str:
-    """Fetch recent Telegram messages mentioning ``ticker`` from Indian stock
-    channels and return them as a formatted plaintext block.
-
-    Returns a placeholder string on any failure — the caller never has to
-    special-case None or exceptions.
-    """
-    enabled = os.environ.get("TELEGRAM_ENABLED", "").strip().lower()
-    if enabled != "true":
-        return (
-            "<Telegram disabled: set TELEGRAM_ENABLED=true in .env to enable>"
-        )
+    """Fetch matching messages without blocking the analysis on failure."""
+    if os.environ.get("TELEGRAM_ENABLED", "").strip().lower() != "true":
+        return "<Telegram disabled: set TELEGRAM_ENABLED=true to enable>"
 
     api_id = os.environ.get("TELEGRAM_API_ID", "").strip()
     api_hash = os.environ.get("TELEGRAM_API_HASH", "").strip()
-
     if not api_id or not api_hash:
-        return (
-            "<Telegram unavailable: set TELEGRAM_API_ID and TELEGRAM_API_HASH "
-            "in your .env>"
-        )
-
-    if not channels:
-        return "<Telegram unavailable: no channels configured>"
-
+        return "<Telegram unavailable: TELEGRAM_API_ID or TELEGRAM_API_HASH is missing>"
     try:
         api_id_int = int(api_id)
-    except (ValueError, TypeError):
+    except (TypeError, ValueError):
         return "<Telegram unavailable: TELEGRAM_API_ID must be an integer>"
 
-    session_file = os.environ.get("TELEGRAM_SESSION_FILE") or "telegram_session"
+    selected_channels = _configured_channels(channels)
+    if not selected_channels:
+        return "<Telegram unavailable: no channels configured>"
 
-    # Run the async fetch in a sync wrapper
+    session_file = os.environ.get("TELEGRAM_SESSION_FILE", "telegram_session")
+    try:
+        timeout_seconds = max(1.0, float(os.environ.get("TELEGRAM_TIMEOUT_SECONDS", "20")))
+    except ValueError:
+        timeout_seconds = 20.0
+
     return _sync_fetch(
-        api_id_int, api_hash, session_file, ticker, channels, limit_per_channel, max_days
+        api_id_int,
+        api_hash,
+        session_file,
+        ticker,
+        selected_channels,
+        limit_per_channel,
+        max_days,
+        as_of_date,
+        company_name,
+        timeout_seconds,
     )
 
 
@@ -124,17 +114,32 @@ def _sync_fetch(
     channels: tuple[str, ...],
     limit_per_channel: int,
     max_days: int,
+    as_of_date: str | None,
+    company_name: str | None,
+    timeout_seconds: float,
 ) -> str:
-    """Synchronous wrapper for the async Telegram fetch."""
     try:
         return asyncio.run(
-            _fetch_telegram_async(
-                api_id, api_hash, session_file, ticker, channels, limit_per_channel, max_days
+            asyncio.wait_for(
+                _fetch_telegram_async(
+                    api_id,
+                    api_hash,
+                    session_file,
+                    ticker,
+                    channels,
+                    limit_per_channel,
+                    max_days,
+                    as_of_date,
+                    company_name,
+                ),
+                timeout=timeout_seconds,
             )
         )
+    except TimeoutError:
+        return f"<Telegram unavailable for {ticker}: timed out after {timeout_seconds:g}s>"
     except Exception as exc:
         logger.warning("Telegram fetch failed for %s: %s", ticker, exc)
-        return f"<Telegram unavailable: {type(exc).__name__}: {exc}>"
+        return f"<Telegram unavailable for {ticker}: {type(exc).__name__}>"
 
 
 async def _fetch_telegram_async(
@@ -145,133 +150,79 @@ async def _fetch_telegram_async(
     channels: tuple[str, ...],
     limit_per_channel: int,
     max_days: int,
+    as_of_date: str | None,
+    company_name: str | None,
 ) -> str:
-    """Core async implementation."""
     from telethon import TelegramClient
 
-    search_terms = _search_terms(ticker)
-    base = ticker.upper().replace(".NS", "").replace(".BO", "")
-    cutoff = datetime.now(timezone.utc) - timedelta(days=max_days)
-    total_messages = 0
-    blocks = []
+    search_terms = _search_terms(ticker, company_name)
+    if as_of_date:
+        end = datetime.strptime(as_of_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        end += timedelta(days=1)
+    else:
+        end = datetime.now(timezone.utc)
+    cutoff = end - timedelta(days=max_days)
+    blocks: list[str] = []
+    seen: set[tuple[int, int]] = set()
 
     async with TelegramClient(session_file, api_id, api_hash) as client:
-        # Check if we're authorized
         if not await client.is_user_authorized():
-            # Telethon will raise an interactive prompt via stderr/stdin.
-            # In non-interactive contexts we can't proceed.
-            logger.warning(
-                "Telegram: not authorized. "
-                "On first use, run interactively to complete phone login."
-            )
-            return (
-                "<Telegram unavailable: not authorized. "
-                "Run the interactive login first:\n"
-                "  python -c \"from telethon import TelegramClient; "
-                "client = TelegramClient('session', API_ID, API_HASH); "
-                "client.start(); client.disconnect()\"\n"
-                "or keep a session file from a prior login.>"
-            )
+            return "<Telegram unavailable: session is not authorized>"
 
         for channel_name in channels:
             try:
                 entity = await client.get_entity(channel_name)
-            except ValueError as exc:
-                logger.info("Telegram: channel '%s' not found: %s", channel_name, exc)
-                blocks.append(
-                    f"  t.me/{channel_name} — skipped (not found or private)"
-                )
-                continue
             except Exception as exc:
-                logger.warning(
-                    "Telegram: error resolving '%s': %s", channel_name, exc
-                )
+                logger.info("Telegram channel %s unavailable: %s", channel_name, exc)
                 continue
 
-            channel_title = getattr(entity, "title", channel_name)
-            channel_username = getattr(entity, "username", channel_name)
-
-            # Fetch recent messages
-            channel_matches = 0
             channel_lines: list[str] = []
-            message_count = 0
-
-            try:
-                async for message in client.iter_messages(
-                    entity, limit=limit_per_channel
-                ):
-                    if message.date and message.date.replace(tzinfo=timezone.utc) < cutoff:
-                        continue
-                    if not message.text:
-                        continue
-
-                    text = message.text.strip()
-                    # Check if any search term appears
-                    text_lower = text.lower()
-                    matched = False
-                    for term in search_terms:
-                        if term.lower() in text_lower:
-                            matched = True
-                            break
-                    # Also check raw ticker (e.g. "NTPC", "TATACOMM")
-                    if not matched and base.lower() in text_lower:
-                        matched = True
-
-                    if not matched:
-                        continue
-
-                    message_count += 1
-                    channel_matches += 1
-                    total_messages += 1
-
-                    msg_date = message.date.strftime("%Y-%m-%d %H:%M") if message.date else "?"
-                    sender = (
-                        message.sender.first_name or ""
-                        if message.sender
-                        else ""
+            for term in search_terms:
+                try:
+                    messages = client.iter_messages(
+                        entity,
+                        search=term,
+                        offset_date=end,
+                        limit=limit_per_channel,
                     )
-                    sender_str = f" · @{sender}" if sender else ""
-
-                    preview = text[:200].replace("\n", " ").strip()
-                    if len(text) > 200:
-                        preview += "…"
-
-                    channel_lines.append(f"  [{msg_date}{sender_str}] {preview}")
-
-                    if channel_matches >= limit_per_channel:
-                        break
-
-            except Exception as exc:
-                logger.warning(
-                    "Telegram: error reading messages from '%s': %s",
-                    channel_name,
-                    exc,
-                )
-                continue
+                    async for message in messages:
+                        message_date = message.date
+                        if not message_date:
+                            continue
+                        if message_date.tzinfo is None:
+                            message_date = message_date.replace(tzinfo=timezone.utc)
+                        if message_date < cutoff or message_date >= end or not message.text:
+                            continue
+                        key = (getattr(entity, "id", 0), message.id)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        preview = message.text.strip().replace("\n", " ")[:240]
+                        channel_lines.append(
+                            f"  [{message_date:%Y-%m-%d %H:%M}] {preview}"
+                        )
+                        if len(channel_lines) >= limit_per_channel:
+                            break
+                except Exception as exc:
+                    logger.info(
+                        "Telegram search failed for %s/%s: %s",
+                        channel_name,
+                        term,
+                        exc,
+                    )
+                if len(channel_lines) >= limit_per_channel:
+                    break
 
             if channel_lines:
-                blocks.append(
-                    f"t.me/{channel_username} / {channel_title} — "
-                    f"{message_count} recent messages:"
-                )
-                blocks.extend(channel_lines)
-            else:
-                blocks.append(
-                    f"  t.me/{channel_username} — no mentions of "
-                    f"{' / '.join(search_terms)} found"
-                )
+                title = getattr(entity, "title", channel_name)
+                blocks.append(f"t.me/{channel_name} / {title}:\n" + "\n".join(channel_lines))
 
-    if total_messages == 0:
-        channel_str = ", ".join(channels)
+    if not blocks:
         return (
-            f"<Telegram: no messages mentioning "
-            f"{' / '.join(search_terms)} in any of "
-            f"[{channel_str}] in the past {max_days} days>"
+            f"<Telegram: no messages found for {' / '.join(search_terms)} "
+            f"from {cutoff.date()} through {(end - timedelta(days=1)).date()}>"
         )
-
     return (
-        f"Telegram messages mentioning "
-        f"{' / '.join(search_terms)} "
-        f"(past {max_days} days, {total_messages} messages found):\n"
-        + "\n".join(blocks)
+        f"Telegram messages for {' / '.join(search_terms)} "
+        f"({len(seen)} messages):\n" + "\n".join(blocks)
     )

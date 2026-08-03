@@ -1,9 +1,11 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    enforce_exact_tool_ticker,
     get_global_news,
     get_language_instruction,
     get_news,
+    sanitize_agent_output,
 )
 from tradingagents.dataflows.config import get_config
 
@@ -13,8 +15,11 @@ def create_news_analyst(llm):
         current_date = state["trade_date"]
         asset_type = state.get("asset_type", "stock")
         asset_label = "company" if asset_type == "stock" else "asset"
+        snapshot = state.get("sentiment_source_snapshot") or {}
         instrument_context = build_instrument_context(
-            state["company_of_interest"], asset_type
+            state["company_of_interest"],
+            asset_type,
+            canonical_name=snapshot.get("company_name"),
         )
 
         tools = [
@@ -58,13 +63,20 @@ def create_news_analyst(llm):
         result = chain.invoke(state["messages"])
 
         report = ""
+        tags = list(state.get("data_quality_tags") or [])
+        if enforce_exact_tool_ticker(result, state["company_of_interest"]):
+            tags.append("CORRECTED_TOOL_TICKER")
 
         if len(result.tool_calls) == 0:
             report = result.content
 
+        report, output_tags = sanitize_agent_output(str(report or ""), state)
+        tags.extend(output_tags)
+
         return {
             "messages": [result],
             "news_report": report,
+            "data_quality_tags": sorted(set(tags)),
         }
 
     return news_analyst_node

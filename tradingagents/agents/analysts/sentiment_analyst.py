@@ -1,110 +1,208 @@
-"""Sentiment analyst — multi-source sentiment analysis for a target ticker.
+"""Grounded sentiment analysis over a frozen, status-preserving source snapshot."""
 
-Previously named ``social_media_analyst``. Renamed and redesigned because
-the old version had a prompt that demanded social-media analysis but the
-only tool available was Yahoo Finance news — which led LLMs to fabricate
-Reddit/X/StockTwits content under prompt pressure (verified live).
+from __future__ import annotations
 
-The redesigned agent pre-fetches five complementary data sources before
-the LLM is invoked and injects them into the prompt as structured blocks:
-
-  1. News headlines      — Yahoo Finance (institutional framing)
-  2. StockTwits messages  — retail-trader posts indexed by cashtag, with
-                            user-labeled Bullish/Bearish sentiment tags
-  3. Reddit posts         — r/wallstreetbets, r/stocks, r/investing
-  4. Telegram messages    — Indian stock-discussion channels (Telethon)
-  5. Google Trends        — retail-attention signal via search interest
-
-The agent does not use tool-calling; the data is in the prompt from
-turn 0. The LLM produces the sentiment report in a single invocation.
-
-See: https://github.com/TauricResearch/TradingAgents/issues/557
-"""
-
+import re
 from datetime import datetime, timedelta
+from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    find_unsupported_optional_source_claims,
     get_language_instruction,
-    get_news,
+    sanitize_agent_output,
 )
-from tradingagents.dataflows.reddit import fetch_reddit_posts
-from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
-from tradingagents.dataflows.telegram import fetch_telegram_messages
-from tradingagents.dataflows.google_trends import fetch_google_trends
 
 
 def _seven_days_back(trade_date: str) -> str:
-    return (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
+    return (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=7)).strftime(
+        "%Y-%m-%d"
+    )
+
+
+def _source(snapshot: dict[str, Any], name: str) -> dict[str, Any]:
+    return (snapshot.get("sources") or {}).get(name) or {
+        "status": "UNAVAILABLE",
+        "content": f"<{name} unavailable: source snapshot missing>",
+    }
+
+
+def _unsupported_claim_issues(report: str, snapshot: dict[str, Any]) -> list[str]:
+    """Find claims that could not have come from the frozen snapshot."""
+    issues: list[str] = []
+    trends = _source(snapshot, "google_trends")
+    telegram = _source(snapshot, "telegram")
+    if trends.get("status") not in {"OK", "STALE"} and re.search(
+        r"google\s+trends.{0,100}(?:\b\d{1,3}\s*/\s*100\b|\bscore\s*(?:is|:)?\s*\d+)",
+        report,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        issues.append("Google Trends has no usable data, but the report states a numeric score")
+    if telegram.get("status") != "OK" and re.search(
+        r"telegram.{0,100}\b\d+\s+(?:messages?|mentions?|posts?)\b",
+        report,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        issues.append("Telegram has no usable data, but the report states a message count")
+    optional_labels = {
+        "reddit": "Reddit",
+        "telegram": "Telegram",
+        "google_trends": "Google Trends",
+    }
+    for source_name, source_label in optional_labels.items():
+        source = _source(snapshot, source_name)
+        if source.get("status") in {"OK", "STALE"}:
+            continue
+        score_pattern = (
+            rf"{re.escape(source_label)}.{{0,180}}"
+            rf"(?:\|\s*0(?:\s*\(|\s*\|)|(?:score|weight|sentiment).{{0,30}}\b0\b)"
+        )
+        if re.search(score_pattern, report, flags=re.IGNORECASE | re.DOTALL):
+            issues.append(
+                f"{source_label} has no usable data, but the report assigns a zero score or weight"
+            )
+    for claim in find_unsupported_optional_source_claims(
+        report,
+        {"sentiment_source_snapshot": snapshot},
+    ):
+        issues.append(
+            "An unavailable optional source is used as directional evidence: " + claim
+        )
+    return issues
 
 
 def create_sentiment_analyst(llm):
-    """Create a sentiment analyst node for the trading graph.
-
-    Pre-fetches news + StockTwits + Reddit + Telegram + Google Trends data,
-    injects them into the prompt as structured blocks, and produces a
-    sentiment report in a single LLM call.
-    """
+    """Create a sentiment analyst with one bounded report-repair attempt."""
 
     def sentiment_analyst_node(state):
         ticker = state["company_of_interest"]
         end_date = state["trade_date"]
         start_date = _seven_days_back(end_date)
-        instrument_context = build_instrument_context(ticker)
-
-        # Pre-fetch all five sources. Each fetcher degrades gracefully and
-        # returns a string (no exceptions surface from here), so the LLM
-        # always sees something — either real data or a clear placeholder.
-        news_block = get_news.func(ticker, start_date, end_date)
-        stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
-        reddit_block = fetch_reddit_posts(ticker)
-        telegram_block = fetch_telegram_messages(ticker)
-        trends_block = fetch_google_trends(ticker)
-
-        ctx = state.get("trade_context_note", "")
-
+        snapshot = state.get("sentiment_source_snapshot") or {}
+        company_name = snapshot.get("company_name")
+        instrument_context = build_instrument_context(
+            ticker,
+            state.get("asset_type", "stock"),
+            canonical_name=company_name,
+        )
         system_message = _build_system_message(
             ticker=ticker,
             start_date=start_date,
             end_date=end_date,
-            news_block=news_block,
-            stocktwits_block=stocktwits_block,
-            reddit_block=reddit_block,
-            telegram_block=telegram_block,
-            trends_block=trends_block,
-            trade_context_note=ctx,
+            snapshot=snapshot,
+            trade_context_note=state.get("trade_context_note", ""),
         )
-
         prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    "You are a helpful AI assistant, collaborating with other assistants."
-                    " If you or any other assistant has the FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** or deliverable,"
-                    " prefix your response with FINAL TRANSACTION PROPOSAL: **BUY/HOLD/SELL** so the team knows to stop."
-                    "\n{system_message}\n"
-                    "For your reference, the current date is {current_date}. {instrument_context}",
+                    "You are a financial sentiment analyst. Use only the frozen source "
+                    "snapshot below. Never invent source values. An unavailable optional "
+                    "source is unknown, not bearish.\n{system_message}\n"
+                    "Current date: {current_date}. {instrument_context}",
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
+        ).partial(
+            system_message=system_message,
+            current_date=end_date,
+            instrument_context=instrument_context,
         )
+        result = (prompt | llm).invoke(state["messages"])
+        report = str(result.content)
+        issues = _unsupported_claim_issues(report, snapshot)
+        tags = list(state.get("data_quality_tags") or [])
 
-        prompt = prompt.partial(system_message=system_message)
-        prompt = prompt.partial(current_date=end_date)
-        prompt = prompt.partial(instrument_context=instrument_context)
+        if issues:
+            repair_prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        "Rewrite the sentiment report using only the frozen source snapshot. "
+                        "Do not infer numeric values or bullish/bearish consequences from "
+                        "unavailable sources. Their absence is unknown and must have zero "
+                        "directional weight. Preserve useful supported evidence and explicitly "
+                        "label missing sources.\n\n"
+                        "Frozen inputs:\n{system_message}",
+                    ),
+                    (
+                        "human",
+                        "Validation errors:\n{issues}\n\nUnsupported draft:\n{draft}",
+                    ),
+                ]
+            )
+            repaired = (repair_prompt | llm).invoke(
+                {
+                    "system_message": system_message,
+                    "issues": "\n".join(f"- {item}" for item in issues),
+                    "draft": report,
+                }
+            )
+            repaired_report = str(repaired.content)
+            if _unsupported_claim_issues(repaired_report, snapshot):
+                tags.extend(["INVALID_SENTIMENT_REPORT", "FALLBACK_SENTIMENT_DIGEST"])
+                report, has_usable_source = _grounded_fallback_report(snapshot)
+                if not has_usable_source:
+                    tags.append("MISSING_SENTIMENT")
+                result = repaired
+            else:
+                tags.append("REPAIRED_SENTIMENT_REPORT")
+                report = repaired_report
+                result = repaired
 
-        # No bind_tools — the data is already in the prompt; a single LLM
-        # call produces the report directly.
-        chain = prompt | llm
-        result = chain.invoke(state["messages"])
+        report, output_tags = sanitize_agent_output(report, state)
+        tags.extend(output_tags)
 
         return {
             "messages": [result],
-            "sentiment_report": result.content,
+            "sentiment_report": report,
+            "data_quality_tags": sorted(set(tags)),
         }
 
     return sentiment_analyst_node
+
+
+def _grounded_fallback_report(snapshot: dict[str, Any]) -> tuple[str, bool]:
+    """Render valid frozen evidence without a second LLM interpretation."""
+    sources = snapshot.get("sources") or {}
+    labels = {
+        "company_news": "Yahoo Finance company news",
+        "google_news": "India-localized Google News",
+        "reddit": "Reddit",
+        "telegram": "Telegram",
+        "google_trends": "Google Trends",
+    }
+    rows = []
+    evidence = []
+    has_usable_source = False
+    for name, label in labels.items():
+        source = sources.get(name) or {}
+        status = str(source.get("status", "UNAVAILABLE")).upper()
+        usable = status in {"OK", "STALE"}
+        has_usable_source = has_usable_source or usable
+        rows.append(f"| {label} | {status} | {'Evidence retained' if usable else 'Unknown'} |")
+        if usable:
+            content = str(source.get("content") or "<no content>")
+            evidence.append(f"### {label} ({status})\n\n{content}")
+
+    intro = (
+        "The model-generated sentiment narrative failed source-grounding validation "
+        "twice. It was replaced with this deterministic digest. Unavailable sources "
+        "have zero directional weight. No sentiment direction is synthesized here."
+    )
+    report = (
+        "## Grounded sentiment source digest\n\n"
+        + intro
+        + "\n\n| Source | Status | Treatment |\n|---|---|---|\n"
+        + "\n".join(rows)
+    )
+    if evidence:
+        report += "\n\n## Verified source evidence\n\n" + "\n\n".join(evidence)
+    else:
+        report += "\n\nNo usable ticker-specific sentiment or news source was available."
+    return report, has_usable_source
 
 
 def _build_system_message(
@@ -112,111 +210,44 @@ def _build_system_message(
     ticker: str,
     start_date: str,
     end_date: str,
-    news_block: str,
-    stocktwits_block: str,
-    reddit_block: str,
-    telegram_block: str,
-    trends_block: str,
+    snapshot: dict[str, Any],
     trade_context_note: str = "",
 ) -> str:
-    """Assemble the sentiment-analyst system message with structured data blocks."""
-    ctx_line = (
-        f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {trade_context_note}\n"
-        f"Frame ALL analysis for THIS specific trade horizon. Recent news/catalyst activity is most relevant."
-        if trade_context_note
-        else ""
-    )
-    return ctx_line + f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on five complementary data sources that have already been collected for you.
+    sources = snapshot.get("sources") or {}
+    source_sections = []
+    labels = {
+        "company_news": "Yahoo Finance company news",
+        "google_news": "India-localized Google News",
+        "reddit": "Reddit",
+        "telegram": "Telegram",
+        "google_trends": "Google Trends",
+    }
+    for key, label in labels.items():
+        item = sources.get(key) or {"status": "UNAVAILABLE", "content": "<missing>"}
+        source_sections.append(
+            f"### {label}\nStatus: {item.get('status', 'UNAVAILABLE')}\n"
+            f"<start_of_{key}>\n{item.get('content', '<missing>')}\n<end_of_{key}>"
+        )
+    context = f"\nTrade parameters: {trade_context_note}\n" if trade_context_note else ""
+    return f"""Analyze sentiment for {ticker} from {start_date} through {end_date}.{context}
 
-## Data sources (pre-fetched, in this prompt)
+The blocks below are a frozen snapshot. Status is authoritative. When status is
+NO_DATA, DISABLED, or UNAVAILABLE, state that limitation and assign no directional
+weight. Do not claim a score, count, post, or message that is not in the block.
+Healthy Yahoo Finance company news or India-localized Google News is enough to
+produce a useful report. Do not require Telegram, Reddit, or Google Trends.
 
-### News headlines — Yahoo Finance, past 7 days
-Institutional framing. Fact-driven, slower-moving signal.
+{chr(10).join(source_sections)}
 
-<start_of_news>
-{news_block}
-<end_of_news>
-
-### StockTwits messages — retail-trader social platform indexed by cashtag
-Fast-moving signal. Each message carries a user-labeled sentiment tag (Bullish / Bearish / no-label) plus the message body.
-
-<start_of_stocktwits>
-{stocktwits_block}
-<end_of_stocktwits>
-
-### Reddit posts — r/wallstreetbets, r/stocks, r/investing (past 7 days)
-Community discussion. Engagement signal via upvote score and comment count. Subreddit character matters (r/wallstreetbets is often contrarian/exuberant; r/stocks more measured; r/investing longer-term).
-
-<start_of_reddit>
-{reddit_block}
-<end_of_reddit>
-
-### Telegram messages — Indian stock-discussion channels (past 7 days)
-Fast-moving retail signal from Indian investors on Telegram. Messages from active stock-call channels with timestamps and preview text. Chats are often call-oriented (target/stop-loss posts); look for recurring bullish or bearish themes.
-
-<start_of_telegram>
-{telegram_block}
-<end_of_telegram>
-
-### Google Trends — search-interest data (past 7 days)
-Quantitative attention signal. Score is 0–100 (100 = peak popularity). Direction (RISING / FALLING / STABLE) shows whether retail awareness is accelerating. High scores (≥75) suggest FOMO or panic signals; low scores (<25) suggest purely institutional movement.
-
-<start_of_google_trends>
-{trends_block}
-<end_of_google_trends>
-
-## How to analyze this data (best practices)
-
-1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone.
-
-2. **Look for cross-source divergences.** If news framing is bearish but Telegram/StockTwits is overwhelmingly bullish, that mismatch is itself a signal — it can mean retail is leaning into a thesis the news flow hasn't caught up to (or vice versa).
-
-3. **Weight Reddit posts by engagement.** A 400-upvote / 200-comment thread reflects community attention; a 3-upvote post is noise. Read the body excerpts for context — the title alone often misleads.
-
-4. **Read Telegram for Indian-specific retail tone.** Telegram groups often share stock calls with specific price targets and stop-loss levels. A stock appearing across multiple channels with consistent targets is a stronger signal than a one-off mention.
-
-5. **Use Google Trends to validate retail attention.** If search interest is RISING above 50 but the stock hasn't moved yet, it may be a leading indicator. If it's FALLING from a high, retail attention is cooling. If it's below 25, retail isn't watching.
-
-6. **Distinguish opinion from event.** A news headline ("NTPC announces new solar park") is an event; a Telegram message ("NTPC target 400 🚀") is opinion. Both are inputs but should be weighted differently in your conclusions.
-
-7. **Identify recurring narrative themes.** What topic keeps coming up across sources? That's the dominant narrative driving current sentiment.
-
-8. **Be honest about data limits.** If StockTwits returned only a handful of messages, or one or more sources returned an "<unavailable>" placeholder, the sentiment read is less robust — flag this caveat explicitly. If the sources are silent on a given subreddit or channel, say so.
-
-9. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
-
-10. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call.
-
-## Output
-
-Produce a sentiment report covering, in order:
-
-1. **Overall sentiment direction** — Bullish / Bearish / Neutral / Mixed — with a brief confidence note based on data quality and sample size.
-2. **Source-by-source breakdown** — what each of news / StockTwits / Reddit / Telegram / Google Trends is telling you, with specific evidence (cite message counts, ratios, notable posts).
-3. **Divergences, alignments, and key narratives** across sources.
-4. **Catalysts and risks** surfaced by the data.
-5. **Markdown table** at the end summarizing key sentiment signals, their direction, source, and supporting evidence.
+Produce:
+1. Overall Bullish, Bearish, Neutral, or Mixed sentiment with confidence.
+2. A source-by-source account that distinguishes evidence from missing data.
+3. Cross-source narratives, catalysts, and risks.
+4. A Markdown summary table with source status and supported evidence.
 
 {get_language_instruction()}"""
 
 
-# ---------------------------------------------------------------------------
-# Backwards-compatibility shim
-# ---------------------------------------------------------------------------
 def create_social_media_analyst(llm):
-    """Deprecated alias for :func:`create_sentiment_analyst`.
-
-    Kept so existing code that imports ``create_social_media_analyst``
-    continues to work.
-
-    .. deprecated::
-        Import :func:`create_sentiment_analyst` directly instead.
-    """
-    import warnings
-    warnings.warn(
-        "create_social_media_analyst is deprecated and will be removed in a "
-        "future version. Use create_sentiment_analyst instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
+    """Backward-compatible alias."""
     return create_sentiment_analyst(llm)

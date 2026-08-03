@@ -25,6 +25,7 @@ class Propagator:
         entry_price: Optional[float] = None,
         stop_loss_pct: Optional[float] = None,
         trade_strategy: Optional[str] = None,
+        sentiment_source_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -83,6 +84,11 @@ class Propagator:
             "stop_loss_pct": stop_loss_pct,
             "trade_strategy": trade_strategy,
             "trade_context_note": trade_context_note,
+            "analysis_status": "COMPLETE",
+            "data_quality_tags": list(
+                (sentiment_source_snapshot or {}).get("data_quality_tags", [])
+            ),
+            "sentiment_source_snapshot": sentiment_source_snapshot or {},
         }
 
     def get_graph_args(self, callbacks: Optional[List] = None) -> Dict[str, Any]:

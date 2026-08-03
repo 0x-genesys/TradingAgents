@@ -79,3 +79,6 @@ class AgentState(MessagesState):
     stop_loss_pct: Annotated[Optional[float], "Stop loss as a fraction (e.g. -0.045 = -4.5%)"]
     trade_strategy: Annotated[Optional[str], "Strategy type (e.g. 'momentum', 'reversal')"]
     trade_context_note: Annotated[Optional[str], "Human-readable summary of trade parameters for analyst prompts"]
+    analysis_status: Annotated[str, "COMPLETE unless the pipeline cannot produce a trustworthy decision"]
+    data_quality_tags: Annotated[list[str], "Descriptive non-fatal source and report quality tags"]
+    sentiment_source_snapshot: Annotated[dict, "Frozen source inputs used by the sentiment analyst"]

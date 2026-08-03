@@ -13,7 +13,11 @@ from __future__ import annotations
 from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    find_unsupported_optional_source_claims,
+    find_unsupported_upstream_claims,
+    get_data_quality_instruction,
     get_language_instruction,
+    sanitize_agent_output,
 )
 from tradingagents.agents.utils.structured import (
     bind_structured,
@@ -64,7 +68,7 @@ def create_portfolio_manager(llm):
 
 ---
 
-Be decisive and ground every conclusion in specific evidence from the analysts.{get_language_instruction()}"""
+Be decisive and ground every conclusion in specific evidence from the analysts.{get_data_quality_instruction(state)}{get_language_instruction()}"""
 
         final_trade_decision = invoke_structured_or_freetext(
             structured_llm,
@@ -73,6 +77,40 @@ Be decisive and ground every conclusion in specific evidence from the analysts.{
             render_pm_decision,
             "Portfolio Manager",
         )
+
+        tags = list(state.get("data_quality_tags") or [])
+        unsupported_claims = (
+            find_unsupported_optional_source_claims(final_trade_decision, state)
+            + find_unsupported_upstream_claims(final_trade_decision)
+        )
+        if unsupported_claims:
+            repair_prompt = (
+                prompt
+                + "\n\nYour previous draft used unsupported evidence. Rewrite the complete "
+                "decision once. Preserve valid ticker-specific evidence and the rating only if "
+                "verified evidence supports it. Do not use source absence or an invented upstream "
+                "selector/model signal as evidence. Problematic draft excerpts:\n- "
+                + "\n- ".join(unsupported_claims)
+            )
+            final_trade_decision = invoke_structured_or_freetext(
+                structured_llm,
+                llm,
+                repair_prompt,
+                render_pm_decision,
+                "Portfolio Manager grounding repair",
+            )
+            remaining_claims = (
+                find_unsupported_optional_source_claims(final_trade_decision, state)
+                + find_unsupported_upstream_claims(final_trade_decision)
+            )
+            if remaining_claims:
+                tags.append("INVALID_FINAL_GROUNDING")
+                final_trade_decision, output_tags = sanitize_agent_output(
+                    final_trade_decision, state
+                )
+                tags.extend(output_tags)
+            else:
+                tags.append("REPAIRED_FINAL_GROUNDING")
 
         new_risk_debate_state = {
             "judge_decision": final_trade_decision,
@@ -90,6 +128,7 @@ Be decisive and ground every conclusion in specific evidence from the analysts.{
         return {
             "risk_debate_state": new_risk_debate_state,
             "final_trade_decision": final_trade_decision,
+            "data_quality_tags": sorted(set(tags)),
         }
 
     return portfolio_manager_node

@@ -1,4 +1,8 @@
-from tradingagents.agents.utils.agent_utils import get_language_instruction
+from tradingagents.agents.utils.agent_utils import (
+    get_data_quality_instruction,
+    get_language_instruction,
+    sanitize_agent_output,
+)
 
 
 def create_neutral_debator(llm):
@@ -32,11 +36,16 @@ Latest World Affairs Report: {news_report}
 Company Fundamentals Report: {fundamentals_report}
 Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the conservative analyst: {current_conservative_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
 
-Engage actively by analyzing both sides critically, addressing weaknesses in the aggressive and conservative arguments to advocate for a more balanced approach. Challenge each of their points to illustrate why a moderate risk strategy might offer the best of both worlds, providing growth potential while safeguarding against extreme volatility. Focus on debating rather than simply presenting data, aiming to show that a balanced view can lead to the most reliable outcomes. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
+Engage actively by analyzing both sides critically, addressing weaknesses in the aggressive and conservative arguments to advocate for a more balanced approach. Challenge each of their points to illustrate why a moderate risk strategy might offer the best of both worlds, providing growth potential while safeguarding against extreme volatility. Focus on debating rather than simply presenting data, aiming to show that a balanced view can lead to the most reliable outcomes. Output conversationally as if you are speaking without any special formatting.""" + get_data_quality_instruction(state) + get_language_instruction()
 
         response = llm.invoke(prompt)
 
-        argument = f"Neutral Analyst: {response.content}"
+        response_text, output_tags = sanitize_agent_output(
+            str(response.content), state
+        )
+        argument = f"Neutral Analyst: {response_text}"
+        tags = list(state.get("data_quality_tags") or [])
+        tags.extend(output_tags)
 
         new_risk_debate_state = {
             "history": history + "\n" + argument,
@@ -52,6 +61,9 @@ Engage actively by analyzing both sides critically, addressing weaknesses in the
             "count": risk_debate_state["count"] + 1,
         }
 
-        return {"risk_debate_state": new_risk_debate_state}
+        return {
+            "risk_debate_state": new_risk_debate_state,
+            "data_quality_tags": sorted(set(tags)),
+        }
 
     return neutral_node

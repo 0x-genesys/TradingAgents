@@ -10,6 +10,7 @@ Covers:
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import pytest
 
@@ -17,6 +18,59 @@ from tradingagents.dataflows.google_trends import (
     _get_company_name,
     fetch_google_trends,
 )
+import tradingagents.dataflows.google_trends as google_trends_module
+
+
+@pytest.mark.unit
+def test_429_opens_cooldown_without_immediate_retry(tmp_path):
+    class RateLimitError(Exception):
+        response = type(
+            "Response",
+            (),
+            {"status_code": 429, "headers": {"Retry-After": "60"}},
+        )()
+
+    class FakeTrendReq:
+        constructions = 0
+
+        def __init__(self, **kwargs):
+            del kwargs
+            self.__class__.constructions += 1
+
+        def build_payload(self, **kwargs):
+            del kwargs
+            raise RateLimitError("HTTP 429")
+
+    google_trends_module._circuit_until = 0.0
+    google_trends_module._consecutive_429 = 0
+    try:
+        with (
+            patch("pytrends.request.TrendReq", FakeTrendReq),
+            patch.object(google_trends_module, "_wait_before_request"),
+        ):
+            first = google_trends_module.fetch_google_trends_snapshot(
+                "EXAMPLE.NS",
+                as_of_date="2026-08-03",
+                company_name="Example Limited",
+                cache_dir=tmp_path,
+                refresh=True,
+            )
+            second = google_trends_module.fetch_google_trends_snapshot(
+                "SECOND.NS",
+                as_of_date="2026-08-03",
+                company_name="Second Limited",
+                cache_dir=tmp_path,
+                refresh=True,
+            )
+    finally:
+        google_trends_module._circuit_until = 0.0
+        google_trends_module._consecutive_429 = 0
+
+    assert first["status"] == "UNAVAILABLE"
+    assert "429" in first["content"]
+    assert second["status"] == "UNAVAILABLE"
+    assert "cooldown" in second["content"]
+    assert FakeTrendReq.constructions == 1
 
 
 @pytest.mark.unit

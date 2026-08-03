@@ -1,4 +1,6 @@
+import os
 import warnings
+from pathlib import Path
 
 # Load .env files at package import so DEFAULT_CONFIG's env-var overlay
 # (and every llm_clients consumer) sees the user's keys regardless of
@@ -11,6 +13,12 @@ try:
     from dotenv import find_dotenv, load_dotenv
 
     load_dotenv(find_dotenv(usecwd=True))
+    explicit_env = os.environ.get("TRADINGAGENTS_ENV_FILE")
+    repository_env = Path(__file__).resolve().parents[1] / ".env"
+    if explicit_env:
+        load_dotenv(explicit_env, override=False)
+    elif repository_env.exists():
+        load_dotenv(repository_env, override=False)
     load_dotenv(find_dotenv(".env.enterprise", usecwd=True), override=False)
 except ImportError:
     pass
