@@ -46,7 +46,7 @@ def test_optional_sources_add_tags_without_failing(tmp_path) -> None:
             return_value="## EXAMPLE.NS News\nSupported company headline",
         ),
         patch(
-            "tradingagents.dataflows.source_snapshot.fetch_stocktwits_messages",
+            "tradingagents.dataflows.source_snapshot.fetch_google_news_headlines",
             return_value="Google News headlines for EXAMPLE.NS",
         ),
         patch(
@@ -118,7 +118,7 @@ def test_no_primary_data_is_failed_edge_case(tmp_path) -> None:
             return_value="Error fetching news for EXAMPLE.NS: offline",
         ),
         patch(
-            "tradingagents.dataflows.source_snapshot.fetch_stocktwits_messages",
+            "tradingagents.dataflows.source_snapshot.fetch_google_news_headlines",
             return_value=unavailable,
         ),
         patch(
@@ -157,7 +157,7 @@ def test_snapshot_is_reused_across_model_runs(tmp_path) -> None:
             return_value="Supported company headline",
         ),
         patch(
-            "tradingagents.dataflows.source_snapshot.fetch_stocktwits_messages",
+            "tradingagents.dataflows.source_snapshot.fetch_google_news_headlines",
             return_value="Supported India headline",
         ),
         patch(

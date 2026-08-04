@@ -152,8 +152,9 @@ def create_sentiment_analyst(llm):
                 report = repaired_report
                 result = repaired
 
-        report, output_tags = sanitize_agent_output(report, state)
-        tags.extend(output_tags)
+        if "FALLBACK_SENTIMENT_DIGEST" not in tags:
+            report, output_tags = sanitize_agent_output(report, state)
+            tags.extend(output_tags)
 
         return {
             "messages": [result],

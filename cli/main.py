@@ -1098,11 +1098,19 @@ def run_analysis(checkpoint: bool = False):
         )
         update_display(layout, spinner_text, stats_handler=stats_handler, start_time=start_time)
 
+        # Frozen source snapshot shared by the news and sentiment analysts
+        source_snapshot = graph.build_source_snapshot(
+            selections["ticker"],
+            selections["analysis_date"],
+            asset_type=selections["asset_type"],
+        )
+
         # Initialize state and get graph args with callbacks
         init_agent_state = graph.propagator.create_initial_state(
             selections["ticker"],
             selections["analysis_date"],
             asset_type=selections["asset_type"],
+            sentiment_source_snapshot=source_snapshot,
         )
         # Pass callbacks to graph config for tool execution tracking
         # (LLM tracking is handled separately via LLM constructor)
@@ -1218,6 +1226,7 @@ def run_analysis(checkpoint: bool = False):
         final_state = {}
         for chunk in trace:
             final_state.update(chunk)
+        TradingAgentsGraph._finalize_analysis_quality(final_state)
         decision = graph.process_signal(final_state["final_trade_decision"])
 
         # Update all agent statuses to completed

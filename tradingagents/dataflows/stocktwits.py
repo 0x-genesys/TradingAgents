@@ -196,7 +196,7 @@ def _fetch_google_news(
         headlines.append((title, source, sentiment))
 
     if not headlines:
-        return f"<no news headlines found for {base} on NSE in the past week>"
+        return f"<no news headlines found for {base} in the past week>"
 
     total = len(headlines)
     pos = sum(1 for _, _, s in headlines if s == "Positive")
@@ -206,7 +206,7 @@ def _fetch_google_news(
     neg_pct = round(100 * neg / total) if total else 0
 
     summary = (
-        f"Google News headlines for {base}.NS — "
+        f"Google News headlines for {base} — "
         f"Positive: {pos} ({pos_pct}%) · "
         f"Negative: {neg} ({neg_pct}%) · "
         f"Neutral: {neu} · "
@@ -219,6 +219,29 @@ def _fetch_google_news(
         lines.append(f"{tag} [{sentiment}]{src} {title}")
 
     return "\n".join(lines)
+
+
+def fetch_google_news_headlines(
+    ticker: str,
+    limit: int = 10,
+    timeout: float = 10.0,
+    *,
+    as_of_date: str | None = None,
+    company_name: str | None = None,
+) -> str:
+    """Fetch recent Google News RSS headlines for ``ticker`` in any market.
+
+    StockTwits does not cover Indian tickers; callers that need a Google News
+    source for every ticker (US or Indian) use this instead of the StockTwits
+    fallback so the content always matches the source label.
+    """
+    return _fetch_google_news(
+        ticker,
+        limit=limit,
+        timeout=timeout,
+        as_of_date=as_of_date,
+        company_name=company_name,
+    )
 
 
 def fetch_stocktwits_messages(

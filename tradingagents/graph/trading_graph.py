@@ -352,12 +352,8 @@ class TradingAgentsGraph:
                 self._checkpointer_ctx = None
                 self.graph = self.workflow.compile()
 
-    def _run_graph(self, company_name, trade_date, asset_type: str = "stock",
-                   trade_horizon_days: Optional[int] = None,
-                   entry_price: Optional[float] = None,
-                   stop_loss_pct: Optional[float] = None,
-                   trade_strategy: Optional[str] = None):
-        """Execute the graph and write the resulting state to disk and memory log."""
+    def build_source_snapshot(self, company_name, trade_date, asset_type="stock"):
+        """Build the frozen source snapshot shared by the news and sentiment analysts."""
         source_snapshot = {}
         cache_dir = self.config.get("data_cache_dir")
         if asset_type == "stock" and cache_dir:
@@ -367,6 +363,17 @@ class TradingAgentsGraph:
                 cache_dir=cache_dir,
                 refresh=refresh_requested(),
             )
+        return source_snapshot
+
+    def _run_graph(self, company_name, trade_date, asset_type: str = "stock",
+                   trade_horizon_days: Optional[int] = None,
+                   entry_price: Optional[float] = None,
+                   stop_loss_pct: Optional[float] = None,
+                   trade_strategy: Optional[str] = None):
+        """Execute the graph and write the resulting state to disk and memory log."""
+        source_snapshot = self.build_source_snapshot(
+            company_name, trade_date, asset_type=asset_type
+        )
 
         # Initialize state — inject memory log context for PM.
         past_context = self.memory_log.get_past_context(company_name)

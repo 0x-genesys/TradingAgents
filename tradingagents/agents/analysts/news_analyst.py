@@ -29,8 +29,9 @@ _BROAD_NO_NEWS_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"\bno\s+(?:significant|material|newsworthy)\s+(?:news|events?)\b.{0,80}"
-        r"\b(?:found|available|reported|flagged)\b",
+        r"\bno\s+(?:significant|material|newsworthy)\s+(?:news|events?)\b"
+        r"(?![^.!?]{0,80}\b(?:macroeconomic|macro|global(?:ly)?|econom(?:ic|y)|market(?:wide)?)\b)"
+        r".{0,80}\b(?:found|available|reported|flagged)\b",
         re.IGNORECASE,
     ),
 )
@@ -249,15 +250,15 @@ def create_news_analyst(llm):
                     report = repaired_report
                 result = repaired
 
-            if "FALLBACK_NEWS_DIGEST" not in tags:
+        if "FALLBACK_NEWS_DIGEST" not in tags:
+            report, output_tags = sanitize_agent_output(report, state)
+            tags.extend(output_tags)
+            if asset_type == "stock" and report:
                 report = (
                     _grounded_news_digest(snapshot)
                     + "\n\n## News Analyst interpretation\n\n"
                     + report
                 )
-
-        report, output_tags = sanitize_agent_output(report, state)
-        tags.extend(output_tags)
 
         return {
             "messages": [result],

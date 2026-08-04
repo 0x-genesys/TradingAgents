@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from tradingagents.dataflows.google_trends import fetch_google_trends_snapshot
 from tradingagents.dataflows.reddit import fetch_reddit_posts
-from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
+from tradingagents.dataflows.stocktwits import fetch_google_news_headlines
 from tradingagents.dataflows.telegram import fetch_telegram_messages
 from tradingagents.dataflows.yfinance_news import get_news_yfinance
 
@@ -134,7 +134,7 @@ def build_source_snapshot(
         ),
         "google_news": _record(
             "google_news",
-            lambda: fetch_stocktwits_messages(
+            lambda: fetch_google_news_headlines(
                 ticker,
                 limit=30,
                 as_of_date=trade_date,
@@ -174,7 +174,7 @@ def build_source_snapshot(
     for source, tag in tag_by_source.items():
         status = sources[source].get("status")
         if status == "STALE":
-            tags.append("STALE_GOOGLE_TRENDS")
+            tags.append(f"STALE_{source.upper()}")
         elif status != "OK":
             tags.append(tag)
 
