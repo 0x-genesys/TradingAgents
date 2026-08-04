@@ -1,9 +1,10 @@
-"""StockTwits + Indian stock alternative sentiment fetcher.
+"""StockTwits fetcher with a Google News RSS fallback for Indian tickers.
 
 StockTwits covers US stocks at ``api.stocktwits.com/api/2/streams/symbol/{ticker}.json``.
-Indian stocks (.NS / .BO) are not covered on StockTwits; for those tickers we
-fall back to Google News RSS headlines + a simple headline-sentiment scan so
-the sentiment analyst has *some* signal instead of a total data vacuum.
+Indian stocks (.NS / .BO) are not covered on StockTwits; ``fetch_stocktwits_messages``
+falls back to Google News RSS headlines plus a simple headline-sentiment scan.
+The Google News path is also exposed directly as ``fetch_google_news_headlines``
+for the frozen source snapshot consumed by the sentiment and news analysts.
 """
 
 from __future__ import annotations

@@ -276,7 +276,8 @@ of a decision.
 
 ## Persistence and Recovery
 
-TradingAgents persists two kinds of state across runs.
+TradingAgents persists state across runs in three places: the decision log,
+checkpoints, and frozen source snapshots.
 
 ### Decision log
 
@@ -301,6 +302,15 @@ config["checkpoint_enabled"] = True
 ta = TradingAgentsGraph(config=config)
 _, decision = ta.propagate("NVDA", "2026-01-15")
 ```
+
+### Frozen source snapshots
+
+For stocks, the news and sentiment analysts consume a frozen per-ticker source
+snapshot (Yahoo Finance company news, India-localized Google News, Reddit,
+Telegram, and Google Trends) cached under `TRADINGAGENTS_CACHE_DIR` (default
+`~/.tradingagents/cache`). A snapshot is reused for the same ticker and analysis
+date; set `TRADINGAGENTS_REFRESH_SOURCE_SNAPSHOT=true` to rebuild it. Google
+Trends keeps its own cache-first store under the same base directory.
 
 ## Contributing
 

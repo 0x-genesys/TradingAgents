@@ -1,11 +1,9 @@
 """Backwards-compatibility shim for the renamed module.
 
-The agent is now ``sentiment_analyst`` and aggregates Yahoo Finance news,
-StockTwits cashtag streams, and Reddit posts into a single sentiment
-report. Import from ``tradingagents.agents.analysts.sentiment_analyst``
-going forward; this module will be removed in a future release.
-
-See: https://github.com/TauricResearch/TradingAgents/issues/557
+The agent now lives in ``tradingagents.agents.analysts.sentiment_analyst``;
+see its module docstring for the current frozen-source-snapshot design.
+Import from there going forward; this module will be removed in a future
+release. See: https://github.com/TauricResearch/TradingAgents/issues/557
 """
 
 import warnings as _warnings
