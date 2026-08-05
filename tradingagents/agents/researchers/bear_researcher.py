@@ -27,11 +27,11 @@ def create_bear_researcher(llm):
         ctx = state.get("trade_context_note", "")
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame your bear argument for THIS specific trade horizon. Focus on risks that could materialize within the trade window (stop-loss breach, liquidity, momentum failure), not long-term structural concerns." if ctx else ""
 
-        prompt = f"""{ctx_line}You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
+        prompt = f"""{ctx_line}You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators that can realistically matter within this trade window. Do not rely on missing confirmation alone, broad macro caution without a direct ticker transmission path, or missing-source speculation. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
 
 Key points to focus on:
 
-- Risks and Challenges: Highlight factors like market saturation, financial instability, or macroeconomic threats that could hinder the stock's performance.
+- Risks and Challenges: Highlight verified ticker-specific downside risks, technical breakdown risk, liquidity concerns, or near-term adverse news that could hinder the stock's performance.
 - Competitive Weaknesses: Emphasize vulnerabilities such as weaker market positioning, declining innovation, or threats from competitors.
 - Negative Indicators: Use evidence from financial data, market trends, or recent adverse news to support your position.
 - Bull Counterpoints: Critically analyze the bull argument with specific data and sound reasoning, exposing weaknesses or over-optimistic assumptions.

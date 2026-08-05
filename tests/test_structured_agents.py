@@ -92,10 +92,36 @@ class TestRenderResearchPlan:
 # ---------------------------------------------------------------------------
 
 
-def _make_trader_state():
+def _make_trader_state(edge: str = "bullish"):
+    reports = {
+        "bullish": {
+            "market_report": (
+                "Bullish breakout with volume expansion and MACD turned bullish. "
+                "Price reclaimed the 10 EMA."
+            ),
+            "news_report": "The company secured regulatory approval for a product launch.",
+            "fundamentals_report": "Management raised guidance after the approval.",
+            "sentiment_report": "Sentiment improved after the catalyst.",
+        },
+        "bearish": {
+            "market_report": (
+                "Bearish crossover with lower lows and repeated resistance rejection."
+            ),
+            "news_report": "The company issued a profit warning after an earnings miss.",
+            "fundamentals_report": "Margin pressure worsened after the guidance cut.",
+            "sentiment_report": "Sentiment weakened after the downgrade.",
+        },
+        "neutral": {
+            "market_report": "Price is range-bound and still needs confirmation.",
+            "news_report": "No fresh catalyst was verified.",
+            "fundamentals_report": "Fundamentals are stable but unchanged.",
+            "sentiment_report": "Sentiment is mixed with no edge.",
+        },
+    }[edge]
     return {
         "company_of_interest": "NVDA",
         "investment_plan": "**Recommendation**: Buy\n**Rationale**: ...\n**Strategic Actions**: ...",
+        **reports,
     }
 
 
@@ -130,7 +156,7 @@ class TestTraderAgent:
         )
         llm = _structured_trader_llm(captured, proposal)
         trader = create_trader(llm)
-        result = trader(_make_trader_state())
+        result = trader(_make_trader_state(edge="bullish"))
         plan = result["trader_investment_plan"]
         assert "**Action**: Buy" in plan
         assert "**Entry Price**: 189.5" in plan
@@ -142,7 +168,7 @@ class TestTraderAgent:
         captured = {}
         llm = _structured_trader_llm(captured)
         trader = create_trader(llm)
-        trader(_make_trader_state())
+        trader(_make_trader_state(edge="bullish"))
         # The investment plan is in the user message of the captured prompt.
         prompt = captured["prompt"]
         assert any("Proposed Investment Plan" in m["content"] for m in prompt)
@@ -156,7 +182,7 @@ class TestTraderAgent:
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
         llm.invoke.return_value = MagicMock(content=plain_response)
         trader = create_trader(llm)
-        result = trader(_make_trader_state())
+        result = trader(_make_trader_state(edge="bearish"))
         assert result["trader_investment_plan"] == plain_response
 
 
@@ -165,7 +191,26 @@ class TestTraderAgent:
 # ---------------------------------------------------------------------------
 
 
-def _make_rm_state():
+def _make_rm_state(edge: str = "bullish"):
+    reports = {
+        "bullish": {
+            "market_report": (
+                "Bullish breakout with volume expansion and MACD turned bullish. "
+                "Price reclaimed the 10 EMA."
+            ),
+            "news_report": "The company secured regulatory approval for a product launch.",
+            "fundamentals_report": "Management raised guidance after the approval.",
+            "sentiment_report": "Sentiment improved after the catalyst.",
+        },
+        "bearish": {
+            "market_report": (
+                "Bearish crossover with lower lows and repeated resistance rejection."
+            ),
+            "news_report": "The company issued a profit warning after an earnings miss.",
+            "fundamentals_report": "Margin pressure worsened after the guidance cut.",
+            "sentiment_report": "Sentiment weakened after the downgrade.",
+        },
+    }[edge]
     return {
         "company_of_interest": "NVDA",
         "investment_debate_state": {
@@ -176,6 +221,7 @@ def _make_rm_state():
             "judge_decision": "",
             "count": 1,
         },
+        **reports,
     }
 
 
@@ -206,7 +252,7 @@ class TestResearchManagerAgent:
         )
         llm = _structured_rm_llm(captured, plan)
         rm = create_research_manager(llm)
-        result = rm(_make_rm_state())
+        result = rm(_make_rm_state(edge="bullish"))
         ip = result["investment_plan"]
         assert "**Recommendation**: Overweight" in ip
         assert "**Rationale**: Bull case" in ip
@@ -217,7 +263,7 @@ class TestResearchManagerAgent:
         captured = {}
         llm = _structured_rm_llm(captured)
         rm = create_research_manager(llm)
-        rm(_make_rm_state())
+        rm(_make_rm_state(edge="bullish"))
         prompt = captured["prompt"]
         for tier in ("Buy", "Overweight", "Hold", "Underweight", "Sell"):
             assert f"**{tier}**" in prompt, f"missing {tier} in prompt"
@@ -228,5 +274,5 @@ class TestResearchManagerAgent:
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
         llm.invoke.return_value = MagicMock(content=plain_response)
         rm = create_research_manager(llm)
-        result = rm(_make_rm_state())
+        result = rm(_make_rm_state(edge="bearish"))
         assert result["investment_plan"] == plain_response
