@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import time
+from datetime import date
 import contextlib
 import io
 from typing import Iterable, Optional
@@ -190,6 +191,8 @@ def fetch_reddit_posts(
     limit_per_sub: int = 5,
     timeout: float = 10.0,
     inter_request_delay: float = 0.4,
+    *,
+    as_of_date: str | None = None,
 ) -> str:
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
@@ -200,6 +203,12 @@ def fetch_reddit_posts(
     Searches by company name (e.g., "Indian Bank" not "INDIANB") for better
     results with Indian NSE/BSE stocks.
     """
+    if as_of_date and as_of_date != date.today().isoformat():
+        return (
+            f"<Reddit unavailable for historical date {as_of_date}: "
+            "the live endpoint cannot guarantee a lookahead-free snapshot>"
+        )
+
     if subreddits is None:
         subreddits = INDIAN_SUBREDDITS + GENERAL_SUBREDDITS
 

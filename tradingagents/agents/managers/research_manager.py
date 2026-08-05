@@ -5,7 +5,9 @@ from __future__ import annotations
 from tradingagents.agents.schemas import ResearchPlan, render_research_plan
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    get_data_quality_instruction,
     get_language_instruction,
+    sanitize_agent_output,
 )
 from tradingagents.agents.utils.structured import (
     bind_structured,
@@ -43,7 +45,7 @@ Commit to a clear stance whenever the debate's strongest arguments warrant one; 
 ---
 
 **Debate History:**
-{history}""" + get_language_instruction()
+{history}""" + get_data_quality_instruction(state) + get_language_instruction()
 
         investment_plan = invoke_structured_or_freetext(
             structured_llm,
@@ -52,6 +54,11 @@ Commit to a clear stance whenever the debate's strongest arguments warrant one; 
             render_research_plan,
             "Research Manager",
         )
+        investment_plan, output_tags = sanitize_agent_output(
+            investment_plan, state
+        )
+        tags = list(state.get("data_quality_tags") or [])
+        tags.extend(output_tags)
 
         new_investment_debate_state = {
             "judge_decision": investment_plan,
@@ -65,6 +72,7 @@ Commit to a clear stance whenever the debate's strongest arguments warrant one; 
         return {
             "investment_debate_state": new_investment_debate_state,
             "investment_plan": investment_plan,
+            "data_quality_tags": sorted(set(tags)),
         }
 
     return research_manager_node

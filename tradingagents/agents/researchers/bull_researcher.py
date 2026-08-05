@@ -1,4 +1,8 @@
-from tradingagents.agents.utils.agent_utils import get_language_instruction
+from tradingagents.agents.utils.agent_utils import (
+    get_data_quality_instruction,
+    get_language_instruction,
+    sanitize_agent_output,
+)
 
 
 def create_bull_researcher(llm):
@@ -21,7 +25,7 @@ def create_bull_researcher(llm):
         )
 
         ctx = state.get("trade_context_note", "")
-        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame your bull argument for THIS specific trade horizon. Is the LSTM momentum signal reliable for this window? Emphasis: short-term momentum catalyst, not multi-year growth story." if ctx else ""
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame your bull argument for THIS specific trade horizon. Assess the setup independently from any upstream selector. Emphasis: short-term momentum catalyst, not multi-year growth story." if ctx else ""
 
         prompt = f"""{ctx_line}You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
@@ -40,11 +44,16 @@ Latest world affairs news: {news_report}
 Conversation history of the debate: {history}
 Last bear argument: {current_response}
 Use this information to deliver a compelling bull argument, refute the bear's concerns, and engage in a dynamic debate that demonstrates the strengths of the bull position.
-""" + get_language_instruction()
+""" + get_data_quality_instruction(state) + get_language_instruction()
 
         response = llm.invoke(prompt)
 
-        argument = f"Bull Analyst: {response.content}"
+        response_text, output_tags = sanitize_agent_output(
+            str(response.content), state
+        )
+        argument = f"Bull Analyst: {response_text}"
+        tags = list(state.get("data_quality_tags") or [])
+        tags.extend(output_tags)
 
         new_investment_debate_state = {
             "history": history + "\n" + argument,
@@ -54,6 +63,9 @@ Use this information to deliver a compelling bull argument, refute the bear's co
             "count": investment_debate_state["count"] + 1,
         }
 
-        return {"investment_debate_state": new_investment_debate_state}
+        return {
+            "investment_debate_state": new_investment_debate_state,
+            "data_quality_tags": sorted(set(tags)),
+        }
 
     return bull_node

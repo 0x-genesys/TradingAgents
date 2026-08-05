@@ -69,7 +69,7 @@ Our framework decomposes complex trading tasks into specialized roles. This ensu
 
 ### Analyst Team
 - Fundamentals Analyst: Evaluates company financials and performance metrics, identifying intrinsic values and potential red flags.
-- Sentiment Analyst: Aggregates news headlines, StockTwits, and Reddit chatter into a single sentiment read to gauge short-term market mood.
+- Sentiment Analyst: Uses a frozen per-ticker snapshot of Yahoo Finance news, India-localized Google News, Reddit, Telegram, and Google Trends. Optional source gaps are explicit and carry no bearish weight.
 - News Analyst: Monitors global news and macroeconomic indicators, interpreting the impact of events on market conditions.
 - Technical Analyst: Utilizes technical indicators (like MACD and RSI) to detect trading patterns and forecast price movements.
 
@@ -225,9 +225,59 @@ print(decision)
 
 See `tradingagents/default_config.py` for all configuration options.
 
+### Source quality contract
+
+Stock analyses persist `analysis_status`, `data_quality_tags`, and the exact
+`sentiment_source_snapshot` in the final state. `FAILED` is reserved for runs
+that cannot produce a decision from trustworthy primary ticker-specific data.
+Optional gaps use descriptive tags such as `MISSING_TELEGRAM`,
+`MISSING_REDDIT`, `MISSING_GOOGLE_TRENDS`, and `MISSING_SENTIMENT` while the
+analysis continues. Google Trends is cache-first and opens a cooldown circuit
+after HTTP 429 responses. Sentiment reports that invent values for unavailable
+sources receive one rewrite attempt; a second grounding failure discards only
+the unsupported narrative, substitutes a deterministic digest of valid frozen
+sources, and tags it `INVALID_SENTIMENT_REPORT` and
+`FALLBACK_SENTIMENT_DIGEST`. `MISSING_SENTIMENT` is added only when no usable
+sentiment or company-news source exists.
+
+The same source-availability policy is injected into the bull/bear debate,
+research manager, trader, risk debate, and portfolio manager. An unavailable
+optional source means unknown and cannot be used as bearish evidence. If the
+final decision still turns an optional gap into a directional claim, the
+portfolio manager gets one grounded rewrite; the result is tagged
+`REPAIRED_FINAL_GROUNDING` or `INVALID_FINAL_GROUNDING` for auditability.
+Every downstream output is also sanitized before the next agent reads it. Any
+remaining bullish or bearish inference based on source absence is replaced and
+tagged `REMOVED_UNSUPPORTED_SOURCE_CLAIM`.
+
+TradingAgents remains independent from upstream candidate generation. It may
+receive only the ticker, entry reference, seven-session horizon, stop, and trade
+strategy. It does not receive or infer an LSTM signal, model score, rank,
+features, selection history, or selection reason. Agent prompts enforce this
+boundary, and any invented upstream-model claim is removed and tagged
+`REMOVED_UNSUPPORTED_UPSTREAM_CLAIM`. Ticker-bearing tool calls are also forced
+to the exact graph instrument. An attempted symbol typo is corrected before the
+tool executes and tagged `CORRECTED_TOOL_TICKER`.
+
+For stocks, the News Analyst and Sentiment Analyst consume the same frozen Yahoo
+Finance and India-localized Google News blocks. The News Analyst does not run a
+second ticker-news search. It may fetch global news only for horizon-relevant
+macro context. A ticker-news contradiction gets one grounded rewrite attempt;
+a second failure produces a deterministic frozen-news digest tagged
+`INVALID_NEWS_REPORT` and `FALLBACK_NEWS_DIGEST`.
+
+Telegram is paused and disabled by default. Scheduled runs exit before Telegram
+credentials, client imports, or network access unless `TELEGRAM_ENABLED=true` is
+explicitly configured. To enable it later, configure
+`TELEGRAM_ENABLED=true`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, and an already
+authorized `TELEGRAM_SESSION_FILE`. Use `TELEGRAM_CHANNELS` for a comma-separated
+channel override. Missing Telegram access never blocks or changes the direction
+of a decision.
+
 ## Persistence and Recovery
 
-TradingAgents persists two kinds of state across runs.
+TradingAgents persists state across runs in three places: the decision log,
+checkpoints, and frozen source snapshots.
 
 ### Decision log
 
@@ -252,6 +302,15 @@ config["checkpoint_enabled"] = True
 ta = TradingAgentsGraph(config=config)
 _, decision = ta.propagate("NVDA", "2026-01-15")
 ```
+
+### Frozen source snapshots
+
+For stocks, the news and sentiment analysts consume a frozen per-ticker source
+snapshot (Yahoo Finance company news, India-localized Google News, Reddit,
+Telegram, and Google Trends) cached under `TRADINGAGENTS_CACHE_DIR` (default
+`~/.tradingagents/cache`). A snapshot is reused for the same ticker and analysis
+date; set `TRADINGAGENTS_REFRESH_SOURCE_SNAPSHOT=true` to rebuild it. Google
+Trends keeps its own cache-first store under the same base directory.
 
 ## Contributing
 

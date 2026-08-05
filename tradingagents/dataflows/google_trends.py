@@ -1,54 +1,277 @@
-"""Google Trends data fetcher for retail-attention signal.
+"""Cached, rate-aware Google Trends enrichment.
 
-Uses ``pytrends`` (unofficial Google Trends API, no API key needed) to
-fetch the search-interest score for a stock's company name over the past
-7 days. A rising search-interest score suggests growing retail attention
-and can serve as a leading indicator for momentum-driven moves.
-
-Usage:
-    from tradingagents.dataflows.google_trends import fetch_google_trends
-    trends = fetch_google_trends(ticker, ticker)
-    # trends is a formatted str (always safe to print/inject)
+Google Trends is optional evidence. A missing or rate-limited response must
+never acquire a bullish or bearish meaning. The public ``fetch_google_trends``
+wrapper remains string-compatible with older callers; new code should use
+``fetch_google_trends_snapshot`` so source status is preserved separately from
+the human-readable content.
 """
 
 from __future__ import annotations
 
-import logging
-import time
 import contextlib
 import io
-from typing import Optional
+import json
+import logging
+import math
+import re
+import time
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Min requests between API calls to avoid rate limiting
-_REQUEST_DELAY = 5.0
-_last_req: float = 0.0
+_REQUEST_DELAY_SECONDS = 5.0
+_DEFAULT_COOLDOWN_SECONDS = 120.0
+_MAX_STALE_HOURS = 36.0
+_last_request_at = 0.0
+_circuit_until = 0.0
+_consecutive_429 = 0
 
 
-def _rate_limit():
-    """Enforce a minimum delay between Google Trends API requests."""
-    global _last_req
-    now = time.monotonic()
-    elapsed = now - _last_req
-    if elapsed < _REQUEST_DELAY:
-        time.sleep(_REQUEST_DELAY - elapsed)
-    _last_req = time.monotonic()
+def _wait_before_request() -> None:
+    """Apply the process-wide delay before every Google HTTP request."""
+    global _last_request_at
+    elapsed = time.monotonic() - _last_request_at
+    if elapsed < _REQUEST_DELAY_SECONDS:
+        time.sleep(_REQUEST_DELAY_SECONDS - elapsed)
+    _last_request_at = time.monotonic()
 
 
 def _get_company_name(ticker: str, timeout: float = 5.0) -> str:
-    """Look up the company name for a ticker via yfinance (short timeout)."""
+    """Look up the company name for a ticker via yfinance."""
     try:
         import yfinance as yf
 
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
             io.StringIO()
         ):
-            t = yf.Ticker(ticker)
-            info = t.info or {}
+            info = yf.Ticker(ticker).info or {}
         return (info.get("longName") or info.get("shortName") or "").strip()
     except Exception:
         return ""
+
+
+def _safe_component(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", value)
+
+
+def _cache_path(cache_dir: str | Path, ticker: str, as_of_date: str) -> Path:
+    return (
+        Path(cache_dir)
+        / "google_trends"
+        / _safe_component(ticker.upper())
+        / f"{as_of_date}.json"
+    )
+
+
+def _load_json(path: Path) -> dict[str, Any] | None:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _fresh_age_hours(payload: dict[str, Any]) -> float | None:
+    fetched_at = payload.get("fetched_at")
+    if not fetched_at:
+        return None
+    try:
+        fetched = datetime.fromisoformat(str(fetched_at).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if fetched.tzinfo is None:
+        fetched = fetched.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - fetched).total_seconds() / 3600.0
+
+
+def _latest_stale(cache_dir: str | Path, ticker: str) -> dict[str, Any] | None:
+    directory = Path(cache_dir) / "google_trends" / _safe_component(ticker.upper())
+    for path in sorted(directory.glob("*.json"), reverse=True):
+        payload = _load_json(path)
+        if not payload or payload.get("status") != "OK":
+            continue
+        age = _fresh_age_hours(payload)
+        if age is not None and age <= _MAX_STALE_HOURS:
+            stale = dict(payload)
+            stale["status"] = "STALE"
+            stale["cache_age_hours"] = round(age, 2)
+            stale["data_quality_tags"] = ["STALE_GOOGLE_TRENDS"]
+            return stale
+    return None
+
+
+def _is_429(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) == 429:
+        return True
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return "429" in text or "too many requests" in text
+
+
+def _retry_after_seconds(exc: Exception) -> float:
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", {}) or {}
+    raw = headers.get("Retry-After") or headers.get("retry-after")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_COOLDOWN_SECONDS
+    return min(max(value, 1.0), _DEFAULT_COOLDOWN_SECONDS)
+
+
+def _unavailable(
+    ticker: str,
+    query: str,
+    as_of_date: str,
+    reason: str,
+    cache_dir: str | Path,
+) -> dict[str, Any]:
+    stale = _latest_stale(cache_dir, ticker)
+    if stale:
+        stale["reason"] = reason
+        return stale
+    return {
+        "source": "google_trends",
+        "status": "UNAVAILABLE",
+        "ticker": ticker,
+        "query": query,
+        "as_of_date": as_of_date,
+        "fetched_at": None,
+        "content": f"<Google Trends unavailable for {ticker}: {reason}>",
+        "data_quality_tags": ["MISSING_GOOGLE_TRENDS"],
+    }
+
+
+def fetch_google_trends_snapshot(
+    ticker: str,
+    *,
+    as_of_date: str | None = None,
+    company_name: str | None = None,
+    cache_dir: str | Path = ".cache",
+    refresh: bool = False,
+    gprop: str = "",
+) -> dict[str, Any]:
+    """Return a status-preserving cached Google Trends snapshot.
+
+    There is no synchronous retry sleep on 429. The process opens a cooldown
+    circuit, returns stale data when available, and lets later tickers retry
+    after the naturally long TradingAgents analysis interval.
+    """
+    global _circuit_until, _consecutive_429
+
+    as_of = as_of_date or date.today().isoformat()
+    query = (company_name or _get_company_name(ticker) or ticker.split(".", 1)[0]).strip()
+    path = _cache_path(cache_dir, ticker, as_of)
+    if not refresh:
+        exact = _load_json(path)
+        if exact:
+            exact["cache_hit"] = True
+            return exact
+
+    if math.isinf(_circuit_until) or time.monotonic() < _circuit_until:
+        return _unavailable(ticker, query, as_of, "rate-limit cooldown active", cache_dir)
+
+    try:
+        from pytrends.request import TrendReq
+    except ImportError:
+        return _unavailable(ticker, query, as_of, "pytrends is not installed", cache_dir)
+
+    end = date.fromisoformat(as_of)
+    start = end - timedelta(days=7)
+    timeframe = f"{start.isoformat()} {end.isoformat()}"
+
+    try:
+        client = TrendReq(hl="en-IN", tz=330, timeout=(5, 15), retries=0)
+        _wait_before_request()
+        client.build_payload(kw_list=[query], timeframe=timeframe, geo="IN", gprop=gprop)
+        _wait_before_request()
+        frame = client.interest_over_time()
+    except Exception as exc:
+        if _is_429(exc):
+            _consecutive_429 += 1
+            _circuit_until = (
+                math.inf
+                if _consecutive_429 >= 2
+                else time.monotonic() + _retry_after_seconds(exc)
+            )
+            logger.warning("Google Trends rate limited for %s", ticker)
+            return _unavailable(ticker, query, as_of, "HTTP 429 rate limit", cache_dir)
+        logger.warning("Google Trends fetch failed for %s: %s", ticker, exc)
+        return _unavailable(ticker, query, as_of, type(exc).__name__, cache_dir)
+
+    _consecutive_429 = 0
+    _circuit_until = 0.0
+    now = datetime.now(timezone.utc).isoformat()
+    if frame.empty or query not in frame.columns:
+        payload = {
+            "source": "google_trends",
+            "status": "NO_DATA",
+            "ticker": ticker,
+            "query": query,
+            "as_of_date": as_of,
+            "fetched_at": now,
+            "content": f"<Google Trends: no search-interest data for '{query}'>",
+            "data_quality_tags": ["MISSING_GOOGLE_TRENDS"],
+        }
+        _write_json(path, payload)
+        return payload
+
+    values = [int(value) for value in frame[query].tolist()]
+    current = values[-1]
+    peak = max(values)
+    average = sum(values) / len(values)
+    minimum = min(values)
+    midpoint = len(values) // 2
+    first = sum(values[:midpoint]) / midpoint if midpoint else 0.0
+    second_count = len(values) - midpoint
+    second = sum(values[midpoint:]) / second_count if second_count else 0.0
+    if second > first * 1.2:
+        direction = "RISING"
+    elif second < first * 0.8:
+        direction = "FALLING"
+    else:
+        direction = "STABLE"
+
+    content = "\n".join(
+        [
+            f'Google Trends search interest for "{query}" ({ticker}) - {timeframe}:',
+            f"  Current score: {current}",
+            f"  7-day peak: {peak}",
+            f"  7-day average: {average:.1f}",
+            f"  7-day low: {minimum}",
+            f"  Direction: {direction}",
+            "  Scale: 0-100 within this query and time window.",
+        ]
+    )
+    payload = {
+        "source": "google_trends",
+        "status": "OK",
+        "ticker": ticker,
+        "query": query,
+        "as_of_date": as_of,
+        "fetched_at": now,
+        "metrics": {
+            "current": current,
+            "peak": peak,
+            "average": round(average, 2),
+            "low": minimum,
+            "direction": direction,
+        },
+        "content": content,
+        "data_quality_tags": [],
+    }
+    _write_json(path, payload)
+    return payload
 
 
 def fetch_google_trends(
@@ -56,159 +279,7 @@ def fetch_google_trends(
     timeframe: str = "now 7-d",
     gprop: str = "",
 ) -> str:
-    """Fetch Google Trends search-interest data for the company behind ``ticker``.
-
-    Parameters
-    ----------
-    ticker:
-        The ticker symbol (e.g. ``NTPC.NS``). The company name is looked up
-        automatically via yfinance and used as the search keyword.
-    timeframe:
-        Google Trends timeframe string. Default: "now 7-d" (past 7 days).
-        Other options: "now 1-d", "today 1-m", "today 3-m", "today 12-m".
-    gprop:
-        Optional Google property filter. Default: ``""`` (web search).
-        Use ``"news"`` for news-search interest, ``"youtube"`` for YouTube.
-
-    Returns
-    -------
-    str
-        A human-readable formatted text block with interest scores and
-        trending-queries context. Never None — degrades gracefully.
-    """
-    company_name = _get_company_name(ticker)
-    base = ticker.upper().replace(".NS", "").replace(".BO", "")
-    kw = company_name if company_name and len(company_name) > 2 else base
-
-    try:
-        from pytrends.request import TrendReq
-    except ImportError:
-        return "<Google Trends unavailable: install pytrends>"
-
-    try:
-        _rate_limit()
-        pytrends = TrendReq(hl="en-IN", tz=330)  # India timezone
-        pytrends.build_payload(kw_list=[kw], timeframe=timeframe, gprop=gprop)
-
-        # --- Interest over time ---
-        interest_df = pytrends.interest_over_time()
-        if interest_df.empty:
-            return (
-                f"<Google Trends: no search-interest data found for "
-                f"'{kw}' (from {ticker}) in the past 7 days>"
-            )
-
-        # Drop the "isPartial" column if present
-        if "isPartial" in interest_df.columns:
-            interest_df = interest_df.drop(columns=["isPartial"])
-
-        # --- Compute stats ---
-        values = interest_df[kw].tolist()
-        current = values[-1] if values else 0
-        peak = max(values) if values else 0
-        avg = sum(values) / len(values) if values else 0
-        min_val = min(values) if values else 0
-
-        # Trend direction: compare first half vs second half
-        mid = len(values) // 2
-        first_half = sum(values[:mid]) / mid if mid > 0 else 0
-        second_half = sum(values[mid:]) / (len(values) - mid) if len(values) > mid else 0
-
-        if second_half > first_half * 1.2:
-            direction = "RISING"
-            direction_desc = "Search interest is trending UP over the period"
-        elif second_half < first_half * 0.8:
-            direction = "FALLING"
-            direction_desc = "Search interest is trending DOWN over the period"
-        else:
-            direction = "STABLE"
-            direction_desc = "Search interest is relatively flat over the period"
-
-        # --- Interest by region (top 5) ---
-        region_lines: list[str] = []
-        try:
-            regional_df = pytrends.interest_by_region(resolution="COUNTRY", inc_low_vol=True)
-            if not regional_df.empty and kw in regional_df.columns:
-                regional_df = regional_df.sort_values(kw, ascending=False).head(5)
-                for country, row in regional_df.iterrows():
-                    region_lines.append(f"  {country}: {int(row[kw])}")
-        except Exception:
-            region_lines.append("  (regional breakdown unavailable)")
-
-        # --- Related queries (top rising + top) ---
-        rising_lines: list[str] = []
-        top_lines: list[str] = []
-        try:
-            related = pytrends.related_queries()
-            if related and kw in related:
-                rq = related[kw]
-                rising_q = rq.get("rising", None)
-                top_q = rq.get("top", None)
-                if rising_q is not None and not rising_q.empty:
-                    for _, row in rising_q.head(5).iterrows():
-                        query = row.get("query", "")
-                        value = row.get("value", "")
-                        rising_lines.append(f"  {query} ({value})")
-                if top_q is not None and not top_q.empty:
-                    for _, row in top_q.head(5).iterrows():
-                        query = row.get("query", "")
-                        value = row.get("value", "")
-                        top_lines.append(f"  {query} ({value})")
-        except Exception:
-            pass
-
-        # --- Build output ---
-        parts = [
-            f"Google Trends search interest for \"{kw}\" (from {ticker}) — {timeframe}:",
-            f"  Current score: {current}",
-            f"  7-day peak:    {peak}",
-            f"  7-day avg:     {avg:.0f}",
-            f"  7-day low:     {min_val}",
-            f"  Direction:     {direction} — {direction_desc}",
-        ]
-
-        if region_lines:
-            parts.append(f"\n  Interest by country (top 5):")
-            parts.extend(region_lines)
-
-        if rising_lines:
-            parts.append(f"\n  Rising related queries:")
-            parts.extend(rising_lines)
-
-        if top_lines:
-            parts.append(f"\n  Top related queries:")
-            parts.extend(top_lines)
-
-        # --- Score interpretation ---
-        if current >= 75:
-            note = (
-                "  ⚠ High attention: search interest ≥ 75. "
-                "Elevated retail attention — may indicate FOMO or panic."
-            )
-        elif current >= 50:
-            note = (
-                "  📈 Moderate-high attention: search interest 50–74. "
-                "Active retail interest."
-            )
-        elif current >= 25:
-            note = (
-                "  📊 Moderate attention: search interest 25–49. "
-                "Some retail awareness."
-            )
-        else:
-            note = (
-                "  📉 Low attention: search interest < 25. "
-                "Limited retail awareness — trade may be purely institutional."
-            )
-        parts.append(f"\n  {note}")
-
-        parts.append(
-            f"\n  Data source: Google Trends (pytrends). "
-            f"Scale is 0–100 (100 = peak popularity for the term in this period)."
-        )
-
-        return "\n".join(parts)
-
-    except Exception as exc:
-        logger.warning("Google Trends fetch failed for %s: %s", ticker, exc)
-        return f"<Google Trends unavailable for {ticker}: {type(exc).__name__}: {exc}>"
+    """Backward-compatible string interface."""
+    del timeframe
+    snapshot = fetch_google_trends_snapshot(ticker, gprop=gprop)
+    return str(snapshot["content"])

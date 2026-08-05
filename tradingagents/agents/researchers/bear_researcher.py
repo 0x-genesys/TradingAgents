@@ -1,4 +1,8 @@
-from tradingagents.agents.utils.agent_utils import get_language_instruction
+from tradingagents.agents.utils.agent_utils import (
+    get_data_quality_instruction,
+    get_language_instruction,
+    sanitize_agent_output,
+)
 
 
 def create_bear_researcher(llm):
@@ -42,11 +46,16 @@ Latest world affairs news: {news_report}
 Conversation history of the debate: {history}
 Last bull argument: {current_response}
 Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
-""" + get_language_instruction()
+""" + get_data_quality_instruction(state) + get_language_instruction()
 
         response = llm.invoke(prompt)
 
-        argument = f"Bear Analyst: {response.content}"
+        response_text, output_tags = sanitize_agent_output(
+            str(response.content), state
+        )
+        argument = f"Bear Analyst: {response_text}"
+        tags = list(state.get("data_quality_tags") or [])
+        tags.extend(output_tags)
 
         new_investment_debate_state = {
             "history": history + "\n" + argument,
@@ -56,6 +65,9 @@ Use this information to deliver a compelling bear argument, refute the bull's cl
             "count": investment_debate_state["count"] + 1,
         }
 
-        return {"investment_debate_state": new_investment_debate_state}
+        return {
+            "investment_debate_state": new_investment_debate_state,
+            "data_quality_tags": sorted(set(tags)),
+        }
 
     return bear_node

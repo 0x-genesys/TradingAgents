@@ -1,12 +1,14 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    enforce_exact_tool_ticker,
     get_balance_sheet,
     get_cashflow,
     get_fundamentals,
     get_income_statement,
     get_insider_transactions,
     get_language_instruction,
+    sanitize_agent_output,
 )
 from tradingagents.dataflows.config import get_config
 
@@ -14,7 +16,11 @@ from tradingagents.dataflows.config import get_config
 def create_fundamentals_analyst(llm):
     def fundamentals_analyst_node(state):
         current_date = state["trade_date"]
-        instrument_context = build_instrument_context(state["company_of_interest"])
+        snapshot = state.get("sentiment_source_snapshot") or {}
+        instrument_context = build_instrument_context(
+            state["company_of_interest"],
+            canonical_name=snapshot.get("company_name"),
+        )
 
         tools = [
             get_fundamentals,
@@ -61,13 +67,20 @@ def create_fundamentals_analyst(llm):
         result = chain.invoke(state["messages"])
 
         report = ""
+        tags = list(state.get("data_quality_tags") or [])
+        if enforce_exact_tool_ticker(result, state["company_of_interest"]):
+            tags.append("CORRECTED_TOOL_TICKER")
 
         if len(result.tool_calls) == 0:
             report = result.content
 
+        report, output_tags = sanitize_agent_output(str(report or ""), state)
+        tags.extend(output_tags)
+
         return {
             "messages": [result],
             "fundamentals_report": report,
+            "data_quality_tags": sorted(set(tags)),
         }
 
     return fundamentals_analyst_node

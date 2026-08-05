@@ -1,9 +1,11 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    enforce_exact_tool_ticker,
     get_indicators,
     get_language_instruction,
     get_stock_data,
+    sanitize_agent_output,
 )
 from tradingagents.dataflows.config import get_config
 
@@ -13,8 +15,11 @@ def create_market_analyst(llm):
     def market_analyst_node(state):
         current_date = state["trade_date"]
         asset_type = state.get("asset_type", "stock")
+        snapshot = state.get("sentiment_source_snapshot") or {}
         instrument_context = build_instrument_context(
-            state["company_of_interest"], asset_type
+            state["company_of_interest"],
+            asset_type,
+            canonical_name=snapshot.get("company_name"),
         )
 
         tools = [
@@ -83,13 +88,47 @@ Volume-Based Indicators:
         result = chain.invoke(state["messages"])
 
         report = ""
+        tags = list(state.get("data_quality_tags") or [])
+        if enforce_exact_tool_ticker(result, state["company_of_interest"]):
+            tags.append("CORRECTED_TOOL_TICKER")
 
         if len(result.tool_calls) == 0:
-            report = result.content
+            report = str(result.content or "").strip()
+            if not report:
+                synthesis_prompt = ChatPromptTemplate.from_messages(
+                    [
+                        (
+                            "system",
+                            "The market analyst returned an empty final response after "
+                            "using tools. Using only the prior tool outputs, write the "
+                            "complete technical market report now. Do not call tools and "
+                            "do not invent unavailable values.\n{system_message}\n"
+                            "{instrument_context}",
+                        ),
+                        MessagesPlaceholder(variable_name="messages"),
+                        (
+                            "human",
+                            "Synthesize the final market report with a Markdown summary table.",
+                        ),
+                    ]
+                ).partial(
+                    system_message=system_message,
+                    instrument_context=instrument_context,
+                )
+                repaired = (synthesis_prompt | llm).invoke(state["messages"])
+                repaired_report = str(repaired.content or "").strip()
+                if repaired_report:
+                    report = repaired_report
+                    result = repaired
+                    tags.append("REPAIRED_MARKET_REPORT")
+
+        report, output_tags = sanitize_agent_output(report, state)
+        tags.extend(output_tags)
 
         return {
             "messages": [result],
             "market_report": report,
+            "data_quality_tags": sorted(set(tags)),
         }
 
     return market_analyst_node

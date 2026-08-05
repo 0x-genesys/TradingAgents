@@ -25,6 +25,10 @@ from tradingagents.agents.utils.agent_states import (
     RiskDebateState,
 )
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.source_snapshot import (
+    build_source_snapshot,
+    refresh_requested,
+)
 
 # Import the new abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
@@ -348,12 +352,29 @@ class TradingAgentsGraph:
                 self._checkpointer_ctx = None
                 self.graph = self.workflow.compile()
 
+    def build_source_snapshot(self, company_name, trade_date, asset_type="stock"):
+        """Build the frozen source snapshot shared by the news and sentiment analysts."""
+        source_snapshot = {}
+        cache_dir = self.config.get("data_cache_dir")
+        if asset_type == "stock" and cache_dir:
+            source_snapshot = build_source_snapshot(
+                company_name,
+                str(trade_date),
+                cache_dir=cache_dir,
+                refresh=refresh_requested(),
+            )
+        return source_snapshot
+
     def _run_graph(self, company_name, trade_date, asset_type: str = "stock",
                    trade_horizon_days: Optional[int] = None,
                    entry_price: Optional[float] = None,
                    stop_loss_pct: Optional[float] = None,
                    trade_strategy: Optional[str] = None):
         """Execute the graph and write the resulting state to disk and memory log."""
+        source_snapshot = self.build_source_snapshot(
+            company_name, trade_date, asset_type=asset_type
+        )
+
         # Initialize state — inject memory log context for PM.
         past_context = self.memory_log.get_past_context(company_name)
         init_agent_state = self.propagator.create_initial_state(
@@ -362,6 +383,7 @@ class TradingAgentsGraph:
             entry_price=entry_price,
             stop_loss_pct=stop_loss_pct,
             trade_strategy=trade_strategy,
+            sentiment_source_snapshot=source_snapshot,
         )
         args = self.propagator.get_graph_args()
 
@@ -386,6 +408,8 @@ class TradingAgentsGraph:
         else:
             final_state = self.graph.invoke(init_agent_state, **args)
 
+        self._finalize_analysis_quality(final_state)
+
         # Store current state for reflection.
         self.curr_state = final_state
 
@@ -406,6 +430,32 @@ class TradingAgentsGraph:
             )
 
         return final_state, self.process_signal(final_state["final_trade_decision"])
+
+    @staticmethod
+    def _finalize_analysis_quality(final_state: Dict[str, Any]) -> None:
+        """Assign non-fatal data tags and reserve FAILED for unusable runs."""
+        tags = set(final_state.get("data_quality_tags") or [])
+        report_tags = {
+            "market_report": "MISSING_MARKET_REPORT",
+            "sentiment_report": "MISSING_SENTIMENT",
+            "news_report": "MISSING_NEWS_REPORT",
+            "fundamentals_report": "MISSING_FUNDAMENTALS_REPORT",
+        }
+        for field, tag in report_tags.items():
+            if not str(final_state.get(field) or "").strip():
+                tags.add(tag)
+
+        snapshot = final_state.get("sentiment_source_snapshot") or {}
+        primary_reports = any(
+            str(final_state.get(field) or "").strip()
+            for field in ("market_report", "news_report", "fundamentals_report")
+        )
+        primary_data = bool(snapshot.get("primary_data_available")) or primary_reports
+        has_decision = bool(str(final_state.get("final_trade_decision") or "").strip())
+        final_state["analysis_status"] = (
+            "COMPLETE" if primary_data and has_decision else "FAILED"
+        )
+        final_state["data_quality_tags"] = sorted(tags)
 
     def _log_state(self, trade_date, final_state):
         """Log the final state to a JSON file."""
@@ -437,6 +487,11 @@ class TradingAgentsGraph:
             },
             "investment_plan": final_state["investment_plan"],
             "final_trade_decision": final_state["final_trade_decision"],
+            "analysis_status": final_state.get("analysis_status", "FAILED"),
+            "data_quality_tags": final_state.get("data_quality_tags", []),
+            "sentiment_source_snapshot": final_state.get(
+                "sentiment_source_snapshot", {}
+            ),
         }
 
         # Save to file. Reject ticker values that would escape the

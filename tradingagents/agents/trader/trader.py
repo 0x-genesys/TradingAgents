@@ -9,7 +9,9 @@ from langchain_core.messages import AIMessage
 from tradingagents.agents.schemas import TraderProposal, render_trader_proposal
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    get_data_quality_instruction,
     get_language_instruction,
+    sanitize_agent_output,
 )
 from tradingagents.agents.utils.structured import (
     bind_structured,
@@ -37,6 +39,7 @@ def create_trader(llm):
                     + "You are a trading agent analyzing market data to make investment decisions. "
                     "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
                     "Anchor your reasoning in the analysts' reports and the research plan."
+                    + get_data_quality_instruction(state)
                     + get_language_instruction()
                 ),
             },
@@ -60,11 +63,17 @@ def create_trader(llm):
             render_trader_proposal,
             "Trader",
         )
+        trader_plan, output_tags = sanitize_agent_output(
+            trader_plan, state
+        )
+        tags = list(state.get("data_quality_tags") or [])
+        tags.extend(output_tags)
 
         return {
             "messages": [AIMessage(content=trader_plan)],
             "trader_investment_plan": trader_plan,
             "sender": name,
+            "data_quality_tags": sorted(set(tags)),
         }
 
     return functools.partial(trader_node, name="Trader")
