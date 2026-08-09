@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import json
 from datetime import datetime, timedelta
-from typing import Dict, Any, Tuple, List, Optional
+from typing import Dict, Any, Tuple, List, Optional, Set
 
 import yfinance as yf
 
@@ -136,6 +136,85 @@ class TradingAgentsGraph:
         self.workflow = self.graph_setup.setup_graph(selected_analysts)
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
+
+    @staticmethod
+    def _message_text(message: Any) -> str:
+        content = getattr(message, "content", None)
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, dict):
+            return str(content.get("text") or "").strip()
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item.strip())
+                elif isinstance(item, dict):
+                    parts.append(str(item.get("text") or "").strip())
+            return " ".join(part for part in parts if part).strip()
+        return str(content).strip()
+
+    def _debug_stage_markers(
+        self,
+        chunk: Dict[str, Any],
+        emitted_markers: Set[str],
+        last_debate_count: int,
+        last_risk_count: int,
+    ) -> tuple[List[str], int, int]:
+        markers: List[str] = []
+
+        analyst_fields = (
+            ("market_report", "Market Analyst complete"),
+            ("sentiment_report", "Sentiment Analyst complete"),
+            ("news_report", "News Analyst complete"),
+            ("fundamentals_report", "Fundamentals Analyst complete"),
+        )
+        for field, marker in analyst_fields:
+            if field in chunk and marker not in emitted_markers and str(chunk.get(field) or "").strip():
+                markers.append(marker)
+                emitted_markers.add(marker)
+
+        debate_state = chunk.get("investment_debate_state") or {}
+        debate_count = int(debate_state.get("count") or last_debate_count or 0)
+        if debate_count > last_debate_count:
+            current_response = str(debate_state.get("current_response") or "")
+            speaker = "Research debate"
+            if current_response.startswith("Bull Analyst:"):
+                speaker = "Bull Researcher"
+            elif current_response.startswith("Bear Analyst:"):
+                speaker = "Bear Researcher"
+            markers.append(
+                f"{speaker} round {debate_count}/{2 * self.config['max_debate_rounds']}"
+            )
+        last_debate_count = debate_count
+
+        if "investment_plan" in chunk and "Research Manager complete" not in emitted_markers:
+            if str(chunk.get("investment_plan") or "").strip():
+                markers.append("Research Manager complete")
+                emitted_markers.add("Research Manager complete")
+
+        if "trader_investment_plan" in chunk and "Trader complete" not in emitted_markers:
+            if str(chunk.get("trader_investment_plan") or "").strip():
+                markers.append("Trader complete")
+                emitted_markers.add("Trader complete")
+
+        risk_state = chunk.get("risk_debate_state") or {}
+        risk_count = int(risk_state.get("count") or last_risk_count or 0)
+        if risk_count > last_risk_count:
+            speaker = str(risk_state.get("latest_speaker") or "Risk Analyst")
+            markers.append(
+                f"{speaker} round {risk_count}/{3 * self.config['max_risk_discuss_rounds']}"
+            )
+        last_risk_count = risk_count
+
+        if "final_trade_decision" in chunk and "Portfolio Manager complete" not in emitted_markers:
+            if str(chunk.get("final_trade_decision") or "").strip():
+                markers.append("Portfolio Manager complete")
+                emitted_markers.add("Portfolio Manager complete")
+
+        return markers, last_debate_count, last_risk_count
 
     def _get_provider_kwargs(self) -> Dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -394,12 +473,26 @@ class TradingAgentsGraph:
 
         if self.debug:
             trace = []
+            emitted_markers: Set[str] = set()
+            last_debate_count = 0
+            last_risk_count = 0
             for chunk in self.graph.stream(init_agent_state, **args):
-                if len(chunk["messages"]) == 0:
-                    pass
-                else:
-                    chunk["messages"][-1].pretty_print()
-                    trace.append(chunk)
+                markers, last_debate_count, last_risk_count = self._debug_stage_markers(
+                    chunk,
+                    emitted_markers,
+                    last_debate_count,
+                    last_risk_count,
+                )
+                for marker in markers:
+                    logger.info("[graph] %s", marker)
+
+                messages = chunk.get("messages") or []
+                if messages:
+                    last_message = messages[-1]
+                    message_text = self._message_text(last_message)
+                    if message_text != "Continue":
+                        last_message.pretty_print()
+                trace.append(chunk)
             # Streamed chunks are per-node deltas. Merge them so the returned
             # state matches what graph.invoke() yields in the non-debug path.
             final_state = {}
