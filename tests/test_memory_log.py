@@ -58,8 +58,28 @@ def _price_df(prices):
     return pd.DataFrame({"Close": prices})
 
 
-def _make_pm_state(past_context=""):
+def _make_pm_state(past_context="", edge="neutral"):
     """Minimal AgentState dict for portfolio_manager_node."""
+    reports = {
+        "bullish": {
+            "market_report": "Bullish breakout with volume expansion and MACD turned bullish.",
+            "sentiment_report": "Sentiment improved after the catalyst.",
+            "news_report": "The company secured approval for a product launch.",
+            "fundamentals_report": "Management raised guidance after the approval.",
+        },
+        "bearish": {
+            "market_report": "Bearish crossover with lower lows and resistance rejection.",
+            "sentiment_report": "Sentiment weakened after the downgrade.",
+            "news_report": "The company issued a profit warning after an earnings miss.",
+            "fundamentals_report": "Margin pressure worsened after the guidance cut.",
+        },
+        "neutral": {
+            "market_report": "Market report.",
+            "sentiment_report": "Sentiment report.",
+            "news_report": "News report.",
+            "fundamentals_report": "Fundamentals report.",
+        },
+    }[edge]
     return {
         "company_of_interest": "NVDA",
         "past_context": past_context,
@@ -74,10 +94,7 @@ def _make_pm_state(past_context=""):
             "current_neutral_response": "",
             "count": 1,
         },
-        "market_report": "Market report.",
-        "sentiment_report": "Sentiment report.",
-        "news_report": "News report.",
-        "fundamentals_report": "Fundamentals report.",
+        **reports,
         "investment_plan": "Research plan.",
         "trader_investment_plan": "Trader plan.",
     }
@@ -708,7 +725,7 @@ class TestPortfolioManagerInjection:
         )
         llm = _structured_pm_llm(captured, decision)
         pm_node = create_portfolio_manager(llm)
-        result = pm_node(_make_pm_state())
+        result = pm_node(_make_pm_state(edge="bullish"))
         md = result["final_trade_decision"]
         assert "**Rating**: Overweight" in md
         assert "**Executive Summary**: Build position gradually" in md
@@ -725,7 +742,7 @@ class TestPortfolioManagerInjection:
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
         llm.invoke.return_value = MagicMock(content=plain_response)
         pm_node = create_portfolio_manager(llm)
-        result = pm_node(_make_pm_state())
+        result = pm_node(_make_pm_state(edge="bearish"))
         assert result["final_trade_decision"] == plain_response
 
     # get_past_context ordering and limits
