@@ -436,6 +436,43 @@ def test_gap_scanner_ignores_its_own_validation_marker() -> None:
 
 
 @pytest.mark.unit
+def test_gap_scanner_allows_explicit_non_directional_missing_source_treatment() -> None:
+    state = {
+        "sentiment_source_snapshot": {
+            "sources": {
+                "company_news": {"status": "NO_DATA"},
+                "reddit": {"status": "NO_DATA"},
+                "telegram": {"status": "DISABLED"},
+            }
+        }
+    }
+    text = (
+        "Yahoo Finance company news returned no data. "
+        "This is missing/unknown data, not a bearish signal.\n\n"
+        "Reddit returned no posts. "
+        "This is missing data, not evidence of bearish retail sentiment.\n\n"
+        "Telegram is disabled. No directional weight is assigned."
+    )
+
+    assert not find_unsupported_optional_source_claims(text, state)
+
+
+@pytest.mark.unit
+def test_gap_scanner_still_rejects_missing_source_direction_after_safe_phrase() -> None:
+    state = {
+        "sentiment_source_snapshot": {
+            "sources": {"telegram": {"status": "DISABLED"}}
+        }
+    }
+    text = (
+        "Telegram is disabled and has no directional weight, "
+        "but this still raises downside risk because retail demand is unknown."
+    )
+
+    assert find_unsupported_optional_source_claims(text, state)
+
+
+@pytest.mark.unit
 def test_sentiment_report_gets_one_grounded_repair_attempt() -> None:
     llm = FakeListChatModel(
         responses=[

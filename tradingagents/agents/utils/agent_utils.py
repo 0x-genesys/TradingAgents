@@ -292,6 +292,34 @@ def sanitize_agent_output(text: str, state: dict) -> tuple[str, list[str]]:
     return sanitized, tags
 
 
+def _remove_safe_source_gap_treatment_phrases(text: str) -> str:
+    """Remove allowed non-directional treatments before source-gap validation.
+
+    Missing-source explanations often say a gap is "not bearish" or has
+    "no directional weight". Those phrases are the required safe treatment,
+    not unsupported source-gap inference. Remove only those guarded phrases so
+    remaining directional claims such as "risk is higher" still fail.
+    """
+    safe_patterns = (
+        r"\b(?:has|have|carries|carry|assigned|contributes?)\s+"
+        r"(?:no|zero)\s+(?:directional\s+)?(?:weight|signal|score)\b",
+        r"\b(?:no|zero)\s+(?:directional\s+)?(?:weight|signal|score)\s+"
+        r"(?:is\s+)?(?:assigned|given|applied|used|contributed)?\b",
+        r"\bnot\s+(?:a\s+)?(?:bearish|bullish|negative|positive)\s+"
+        r"(?:signal|indicator|factor|input|evidence|sentiment)\b",
+        r"\bnot\s+evidence\s+of\s+(?:a\s+)?"
+        r"(?:bearish|bullish|negative|positive)(?:\s+\w+){0,4}\b",
+        r"\bnot\s+treated\s+as\s+(?:a\s+)?"
+        r"(?:bearish|bullish|negative|positive)(?:\s+\w+){0,4}\b",
+        r"\bnot\s+used\s+as\s+(?:a\s+)?"
+        r"(?:bearish|bullish|negative|positive|directional)(?:\s+\w+){0,4}\b",
+    )
+    scrubbed = text
+    for pattern in safe_patterns:
+        scrubbed = re.sub(pattern, "", scrubbed, flags=re.IGNORECASE)
+    return scrubbed
+
+
 def find_unsupported_optional_source_claims(text: str, state: dict) -> list[str]:
     """Find claims that turn an unavailable source into directional evidence."""
     unavailable = get_unavailable_sources(state)
@@ -336,7 +364,8 @@ def find_unsupported_optional_source_claims(text: str, state: dict) -> list[str]
         generic_gap = re.search(generic_gap_pattern, lowered)
         if not source_named and not generic_gap:
             continue
-        if re.search(absence_pattern, lowered) and re.search(directional_pattern, lowered):
+        directional_scan = _remove_safe_source_gap_treatment_phrases(lowered)
+        if re.search(absence_pattern, lowered) and re.search(directional_pattern, directional_scan):
             claim = segment.strip()
             if claim and claim not in seen:
                 seen.add(claim)
@@ -355,7 +384,8 @@ def find_unsupported_optional_source_claims(text: str, state: dict) -> list[str]
             current_lower,
         ):
             continue
-        if re.search(directional_pattern, current_lower) and current not in seen:
+        directional_scan = _remove_safe_source_gap_treatment_phrases(current_lower)
+        if re.search(directional_pattern, directional_scan) and current not in seen:
             seen.add(current)
             issues.append(current)
     return issues
