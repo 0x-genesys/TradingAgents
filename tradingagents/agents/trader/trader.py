@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage
 
 from tradingagents.agents.schemas import TraderProposal, render_trader_proposal
 from tradingagents.agents.utils.agent_utils import (
+    apply_trader_policy,
     build_instrument_context,
     get_data_quality_instruction,
     get_language_instruction,
@@ -36,9 +37,12 @@ def create_trader(llm):
                 "role": "system",
                 "content": (
                     ctx_line
-                    + "You are a trading agent analyzing market data to make investment decisions. "
-                    "Based on your analysis, provide a specific recommendation to buy, sell, or hold. "
-                    "Anchor your reasoning in the analysts' reports and the research plan."
+                    + "You are a trading agent analyzing market data to make short-term trading decisions. "
+                    "Anchor your reasoning in the analysts' reports and the research plan. "
+                    "Use Hold as the default when the setup lacks a proven edge. "
+                    "A BUY requires either a verified positive catalyst or clearly aligned momentum within the trade window. "
+                    "A SELL requires verified primary ticker-specific downside evidence that can matter within the trade window. "
+                    "Do not turn missing confirmation alone or broad macro caution into a SELL call."
                     + get_data_quality_instruction(state)
                     + get_language_instruction()
                 ),
@@ -48,8 +52,8 @@ def create_trader(llm):
                 "content": (
                     f"Based on a comprehensive analysis by a team of analysts, here is an investment "
                     f"plan tailored for {company_name}. {instrument_context} This plan incorporates "
-                    f"insights from current technical market trends, macroeconomic indicators, and "
-                    f"social media sentiment. Use this plan as a foundation for evaluating your next "
+                    f"insights from current technical market trends, ticker-specific news, company "
+                    f"fundamentals, and sentiment evidence. Use this plan as a foundation for evaluating your next "
                     f"trading decision.\n\nProposed Investment Plan: {investment_plan}\n\n"
                     f"Leverage these insights to make an informed and strategic decision."
                 ),
@@ -66,8 +70,10 @@ def create_trader(llm):
         trader_plan, output_tags = sanitize_agent_output(
             trader_plan, state
         )
+        trader_plan, policy_tags = apply_trader_policy(trader_plan, state)
         tags = list(state.get("data_quality_tags") or [])
         tags.extend(output_tags)
+        tags.extend(policy_tags)
 
         return {
             "messages": [AIMessage(content=trader_plan)],

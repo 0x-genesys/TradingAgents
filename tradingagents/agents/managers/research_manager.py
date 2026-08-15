@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tradingagents.agents.schemas import ResearchPlan, render_research_plan
 from tradingagents.agents.utils.agent_utils import (
+    apply_research_manager_policy,
     build_instrument_context,
     get_data_quality_instruction,
     get_language_instruction,
@@ -40,7 +41,7 @@ def create_research_manager(llm):
 - **Underweight**: Cautious view; recommend trimming exposure
 - **Sell**: Strong conviction in the bear thesis; recommend exiting or avoiding the position
 
-Commit to a clear stance whenever the debate's strongest arguments warrant one; reserve Hold for situations where the evidence on both sides is genuinely balanced.
+Use Hold as the default outcome when neither side proves a short-term edge. A bearish recommendation needs verified primary ticker-specific downside evidence that can matter within the trade window. A bullish recommendation needs either a verified positive catalyst or clearly aligned momentum. Do not use missing confirmation alone or broad macro caution as enough reason for Sell or Underweight.
 
 ---
 
@@ -57,8 +58,12 @@ Commit to a clear stance whenever the debate's strongest arguments warrant one; 
         investment_plan, output_tags = sanitize_agent_output(
             investment_plan, state
         )
+        investment_plan, policy_tags = apply_research_manager_policy(
+            investment_plan, state
+        )
         tags = list(state.get("data_quality_tags") or [])
         tags.extend(output_tags)
+        tags.extend(policy_tags)
 
         new_investment_debate_state = {
             "judge_decision": investment_plan,

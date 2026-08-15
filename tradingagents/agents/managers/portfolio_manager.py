@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
 from tradingagents.agents.utils.agent_utils import (
+    apply_portfolio_manager_policy,
     build_instrument_context,
     find_unsupported_optional_source_claims,
     find_unsupported_upstream_claims,
@@ -68,7 +69,7 @@ def create_portfolio_manager(llm):
 
 ---
 
-Be decisive and ground every conclusion in specific evidence from the analysts.{get_data_quality_instruction(state)}{get_language_instruction()}"""
+Be decisive and ground every conclusion in specific evidence from the analysts. Use Hold as the default when the setup lacks a proven short-term edge. A Buy or Overweight rating needs either a verified positive catalyst or clearly aligned momentum. A Sell or Underweight rating needs verified primary ticker-specific downside evidence that can matter within the stated trade window. Missing confirmation alone or broad macro caution are not enough for a bearish rating.{get_data_quality_instruction(state)}{get_language_instruction()}"""
 
         final_trade_decision = invoke_structured_or_freetext(
             structured_llm,
@@ -111,6 +112,11 @@ Be decisive and ground every conclusion in specific evidence from the analysts.{
                 tags.extend(output_tags)
             else:
                 tags.append("REPAIRED_FINAL_GROUNDING")
+
+        final_trade_decision, policy_tags = apply_portfolio_manager_policy(
+            final_trade_decision, state
+        )
+        tags.extend(policy_tags)
 
         new_risk_debate_state = {
             "judge_decision": final_trade_decision,
