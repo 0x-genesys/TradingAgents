@@ -28,7 +28,7 @@ def create_market_analyst(llm):
         ]
 
         ctx = state.get("trade_context_note", "")
-        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame ALL analysis for THIS specific trade horizon and these parameters. Valuation multiples (P/E, EV/EBITDA) are largely irrelevant for short-term trades." if ctx else ""
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame ALL analysis for THIS specific trade horizon and fixed entry, target, and stop. Assess whether the target is reachable before the stop. Valuation multiples (P/E, EV/EBITDA) are largely irrelevant for short-term trades." if ctx else ""
 
         system_message = (
             ctx_line

@@ -29,7 +29,7 @@ def create_trader(llm):
         investment_plan = state["investment_plan"]
 
         ctx = state.get("trade_context_note", "")
-        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nEvaluate whether the GIVEN entry/stop parameters work for the GIVEN horizon. The entry price and stop loss are constraints — assess viability, not set ideal levels." if ctx else ""
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nEvaluate whether the GIVEN entry, target, and stop work for the GIVEN horizon. These levels are constraints — assess whether the target can be reached before the stop, not set ideal replacement levels. If you populate the structured Entry Price or Stop Loss fields, copy the supplied entry and stop exactly; never substitute a technical support, resistance, or early-exit level for the fixed strategy stop." if ctx else ""
 
         messages = [
             {

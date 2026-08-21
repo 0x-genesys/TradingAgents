@@ -30,7 +30,7 @@ def create_fundamentals_analyst(llm):
         ]
 
         ctx = state.get("trade_context_note", "")
-        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame ALL analysis for THIS specific trade horizon. For short-term trades, skip valuation multiples (P/E, EV/EBITDA) — focus on near-term catalysts and price relative to recent earnings." if ctx else ""
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame ALL analysis for THIS specific trade horizon and fixed target/stop objective. For short-term trades, skip valuation multiples (P/E, EV/EBITDA) — focus on near-term catalysts and price relative to recent earnings." if ctx else ""
 
         system_message = (
             ctx_line

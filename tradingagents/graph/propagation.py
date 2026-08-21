@@ -23,6 +23,7 @@ class Propagator:
         past_context: str = "",
         trade_horizon_days: Optional[int] = None,
         entry_price: Optional[float] = None,
+        profit_target_pct: Optional[float] = None,
         stop_loss_pct: Optional[float] = None,
         trade_strategy: Optional[str] = None,
         sentiment_source_snapshot: Optional[Dict[str, Any]] = None,
@@ -38,11 +39,13 @@ class Propagator:
         trade_context_note = ""
         if trade_horizon_days is not None:
             entry_str = f"₹{entry_price:,.2f}" if entry_price is not None else "N/A"
+            target_str = f"+{profit_target_pct*100:.1f}%" if profit_target_pct is not None else "N/A"
             stop_str = f"{stop_loss_pct*100:.1f}%" if stop_loss_pct is not None else "N/A"
             strategy_str = trade_strategy or "momentum"
             trade_context_note = (
                 f"{strategy_str} trade | {trade_horizon_days}d horizon | "
-                f"Entry: {entry_str} | Stop: {stop_str}"
+                f"Entry: {entry_str} | Target: {target_str} | Stop: {stop_str} | "
+                f"Objective: reach target before stop within the horizon"
             )
 
         return {
@@ -81,6 +84,7 @@ class Propagator:
             "news_report": "",
             "trade_horizon_days": trade_horizon_days,
             "entry_price": entry_price,
+            "profit_target_pct": profit_target_pct,
             "stop_loss_pct": stop_loss_pct,
             "trade_strategy": trade_strategy,
             "trade_context_note": trade_context_note,
