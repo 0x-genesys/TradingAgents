@@ -22,7 +22,7 @@ def create_conservative_debator(llm):
         trader_decision = state["trader_investment_plan"]
 
         ctx = state.get("trade_context_note", "")
-        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nEvaluate risk for THIS specific trade horizon. Will the -4.5% stop loss hold in current volatility? Is there exit liquidity for a short-term trade?" if ctx else ""
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nEvaluate risk for THIS specific trade horizon. Is the fixed stop likely to trigger before the fixed target in current volatility? Is there exit liquidity for a short-term trade?" if ctx else ""
 
         prompt = f"""{ctx_line}As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
 

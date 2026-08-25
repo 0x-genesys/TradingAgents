@@ -25,7 +25,7 @@ def create_research_manager(llm):
         investment_debate_state = state["investment_debate_state"]
 
         ctx = state.get("trade_context_note", "")
-        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nEvaluate whether the debate supports entering a short-term trade with these parameters. Rate for the GIVEN trade horizon, not a generic long-term view." if ctx else ""
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nEvaluate whether the debate supports reaching the fixed target before the fixed stop within the GIVEN trade horizon. Rate for this trade objective, not a generic long-term view." if ctx else ""
 
         prompt = f"""{ctx_line}As the Research Manager and debate facilitator, your role is to critically evaluate this round of debate and deliver a clear, actionable investment plan for the trader.
 

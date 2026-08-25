@@ -229,7 +229,7 @@ def _build_system_message(
             f"### {label}\nStatus: {item.get('status', 'UNAVAILABLE')}\n"
             f"<start_of_{key}>\n{item.get('content', '<missing>')}\n<end_of_{key}>"
         )
-    context = f"\nTrade parameters: {trade_context_note}\n" if trade_context_note else ""
+    context = f"\nTrade parameters: {trade_context_note}\nEvaluate sentiment only for its likelihood of helping the target be reached before the stop within the stated horizon.\n" if trade_context_note else ""
     return f"""Analyze sentiment for {ticker} from {start_date} through {end_date}.{context}
 
 The blocks below are a frozen snapshot. Status is authoritative. When status is

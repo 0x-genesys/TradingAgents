@@ -22,7 +22,7 @@ def create_aggressive_debator(llm):
         trader_decision = state["trader_investment_plan"]
 
         ctx = state.get("trade_context_note", "")
-        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nChampion the upside for THIS specific trade horizon. Focus on whether the momentum signal will play out within the trade window." if ctx else ""
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nChampion the upside for THIS specific trade horizon. Focus on evidence that the fixed target can be reached before the fixed stop." if ctx else ""
 
         prompt = f"""{ctx_line}As the Aggressive Risk Analyst, your role is to actively champion high-reward, high-risk opportunities, emphasizing bold strategies and competitive advantages. When evaluating the trader's decision or plan, focus intently on the potential upside, growth potential, and innovative benefits—even when these come with elevated risk. Use the provided market data and sentiment analysis to strengthen your arguments and challenge the opposing views. Specifically, respond directly to each point made by the conservative and neutral analysts, countering with data-driven rebuttals and persuasive reasoning. Highlight where their caution might miss critical opportunities or where their assumptions may be overly conservative. Here is the trader's decision:
 

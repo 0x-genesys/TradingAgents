@@ -299,6 +299,7 @@ class TradingAgentsGraph:
     def propagate(self, company_name, trade_date, asset_type: str = "stock",
                   trade_horizon_days: Optional[int] = None,
                   entry_price: Optional[float] = None,
+                  profit_target_pct: Optional[float] = None,
                   stop_loss_pct: Optional[float] = None,
                   trade_strategy: Optional[str] = None):
         """Run the trading agents graph for a company on a specific date.
@@ -311,7 +312,8 @@ class TradingAgentsGraph:
         successful node on a subsequent invocation with the same ticker+date.
 
         Optional trade context params (``trade_horizon_days``, ``entry_price``,
-        ``stop_loss_pct``, ``trade_strategy``) are passed through to all analysts
+        ``profit_target_pct``, ``stop_loss_pct``, ``trade_strategy``) are passed
+        through to all analysts
         so they can frame their analysis for the specific trade horizon. When
         omitted (None), the default long-term analysis is used unchanged.
         """
@@ -343,6 +345,7 @@ class TradingAgentsGraph:
                 company_name, trade_date, asset_type=asset_type,
                 trade_horizon_days=trade_horizon_days,
                 entry_price=entry_price,
+                profit_target_pct=profit_target_pct,
                 stop_loss_pct=stop_loss_pct,
                 trade_strategy=trade_strategy,
             )
@@ -368,6 +371,7 @@ class TradingAgentsGraph:
     def _run_graph(self, company_name, trade_date, asset_type: str = "stock",
                    trade_horizon_days: Optional[int] = None,
                    entry_price: Optional[float] = None,
+                   profit_target_pct: Optional[float] = None,
                    stop_loss_pct: Optional[float] = None,
                    trade_strategy: Optional[str] = None):
         """Execute the graph and write the resulting state to disk and memory log."""
@@ -381,6 +385,7 @@ class TradingAgentsGraph:
             company_name, trade_date, asset_type=asset_type, past_context=past_context,
             trade_horizon_days=trade_horizon_days,
             entry_price=entry_price,
+            profit_target_pct=profit_target_pct,
             stop_loss_pct=stop_loss_pct,
             trade_strategy=trade_strategy,
             sentiment_source_snapshot=source_snapshot,

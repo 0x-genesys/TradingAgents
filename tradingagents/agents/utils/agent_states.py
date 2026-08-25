@@ -76,6 +76,7 @@ class AgentState(MessagesState):
     # Optional trade context for short-horizon analysis (e.g. 7-day momentum trades)
     trade_horizon_days: Annotated[Optional[int], "Trade horizon in days (None = long-term / default analysis)"]
     entry_price: Annotated[Optional[float], "Proposed entry price for the trade"]
+    profit_target_pct: Annotated[Optional[float], "Decision target as a fraction (e.g. 0.03 = +3%)"]
     stop_loss_pct: Annotated[Optional[float], "Stop loss as a fraction (e.g. -0.045 = -4.5%)"]
     trade_strategy: Annotated[Optional[str], "Strategy type (e.g. 'momentum', 'reversal')"]
     trade_context_note: Annotated[Optional[str], "Human-readable summary of trade parameters for analyst prompts"]

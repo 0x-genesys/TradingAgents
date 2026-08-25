@@ -147,6 +147,22 @@ class TestTraderAgent:
         prompt = captured["prompt"]
         assert any("Proposed Investment Plan" in m["content"] for m in prompt)
 
+    def test_prompt_requires_fixed_strategy_levels(self):
+        captured = {}
+        llm = _structured_trader_llm(captured)
+        state = {
+            **_make_trader_state(),
+            "trade_context_note": (
+                "momentum trade | 7d horizon | Entry: ₹100.00 | Target: +3.0% | "
+                "Stop: -4.5% | Objective: reach target before stop within the horizon"
+            ),
+        }
+        create_trader(llm)(state)
+
+        system_prompt = captured["prompt"][0]["content"]
+        assert "copy the supplied entry and stop exactly" in system_prompt
+        assert "never substitute a technical support" in system_prompt
+
     def test_falls_back_to_freetext_when_structured_unavailable(self):
         plain_response = (
             "**Action**: Sell\n\nGuidance cut hits margins.\n\n"
