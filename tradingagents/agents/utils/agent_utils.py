@@ -89,6 +89,90 @@ _TOOL_TICKER_ARGUMENTS = {
     "get_news": "ticker",
     "get_insider_transactions": "ticker",
 }
+_TRADER_ACTIONS = {"buy", "hold", "sell"}
+_PORTFOLIO_RATINGS = {"buy", "overweight", "hold", "underweight", "sell"}
+
+_POSITIVE_CATALYST_PATTERNS = (
+    r"\bapproval(?:s)?\b",
+    r"\blaunch(?:ed|es|ing)?\b",
+    r"\border(?:s)? win\b",
+    r"\bcontract(?:s)? (?:win|won|secured|signed)\b",
+    r"\bpartnership\b",
+    r"\bacquisition\b",
+    r"\bbuyback\b",
+    r"\bdividend increase\b",
+    r"\bearnings beat\b",
+    r"\bbeat(?:ing)? estimates\b",
+    r"\bguidance (?:raised|increase[sd]?)\b",
+    r"\bupgrade[sd]?\b",
+    r"\bproduct rollout\b",
+    r"\bcapacity expansion\b",
+)
+_MOMENTUM_PATTERNS = (
+    r"\bbullish crossover\b",
+    r"\bmacd\b.{0,40}\bbullish\b",
+    r"\bbreakout\b",
+    r"\breclaim(?:ed|ing)?\b",
+    r"\bhigher highs?\b",
+    r"\bhigher lows?\b",
+    r"\bvolume (?:expansion|pickup|confirmation|surge)\b",
+    r"\bsupport (?:held|holding|absorbed)\b",
+    r"\boversold bounce\b",
+    r"\bmean[- ]reversion bounce\b",
+    r"\bprice\b.{0,40}\babove\b.{0,40}\b(?:ema|sma|vwap|middle band)\b",
+    r"\brsi\b.{0,40}\brecover(?:ing|ed|y)\b",
+)
+_PRIMARY_BEARISH_EVENT_PATTERNS = (
+    r"\bguidance cut\b",
+    r"\bearnings miss\b",
+    r"\bmiss(?:ed|ing)? estimates\b",
+    r"\bdowngrade[sd]?\b",
+    r"\bwarning letter\b",
+    r"\bregulatory (?:action|risk|warning|scrutiny)\b",
+    r"\bmargin pressure\b",
+    r"\bprofit warning\b",
+    r"\bdebt (?:spike|stress|concern)\b",
+    r"\bpromoter selling\b",
+    r"\bpledge(?:d|ing)? shares\b",
+    r"\blawsuit\b",
+)
+_PRIMARY_BEARISH_TECHNICAL_PATTERNS = (
+    r"\bbearish crossover\b",
+    r"\bmacd\b.{0,40}\bbearish\b",
+    r"\bbreakdown\b",
+    r"\blower highs?\b",
+    r"\blower lows?\b",
+    r"\bdistribution\b",
+    r"\bprice\b.{0,40}\bbelow\b.{0,40}\b(?:ema|sma|vwap|support)\b",
+    r"\bfailed reclaim\b",
+    r"\bresistance rejection\b",
+    r"\btrend failure\b",
+)
+_CONFIRMATION_ONLY_PATTERNS = (
+    r"\bneed(?:s)? confirmation\b",
+    r"\bwait for confirmation\b",
+    r"\bnot confirmed\b",
+    r"\bneeds? a close above\b",
+    r"\bneeds? reclaim\b",
+    r"\buntil price proves\b",
+    r"\bconfirmation (?:is )?missing\b",
+    r"\bwithout confirmation\b",
+    r"\bwait-and-see\b",
+)
+_MACRO_ONLY_PATTERNS = (
+    r"\bmacro(?:economic)?\b",
+    r"\bglobal\b",
+    r"\bgeopolitical\b",
+    r"\boil prices?\b",
+    r"\brate cuts?\b",
+    r"\brate hikes?\b",
+    r"\bfed\b",
+    r"\binflation\b",
+    r"\brecession\b",
+    r"\brisk-off\b",
+    r"\bmarket-wide\b",
+    r"\btariff\b",
+)
 
 
 def enforce_exact_tool_ticker(message, ticker: str) -> bool:
@@ -208,6 +292,34 @@ def sanitize_agent_output(text: str, state: dict) -> tuple[str, list[str]]:
     return sanitized, tags
 
 
+def _remove_safe_source_gap_treatment_phrases(text: str) -> str:
+    """Remove allowed non-directional treatments before source-gap validation.
+
+    Missing-source explanations often say a gap is "not bearish" or has
+    "no directional weight". Those phrases are the required safe treatment,
+    not unsupported source-gap inference. Remove only those guarded phrases so
+    remaining directional claims such as "risk is higher" still fail.
+    """
+    safe_patterns = (
+        r"\b(?:has|have|carries|carry|assigned|contributes?)\s+"
+        r"(?:no|zero)\s+(?:directional\s+)?(?:weight|signal|score)\b",
+        r"\b(?:no|zero)\s+(?:directional\s+)?(?:weight|signal|score)\s+"
+        r"(?:is\s+)?(?:assigned|given|applied|used|contributed)?\b",
+        r"\bnot\s+(?:a\s+)?(?:bearish|bullish|negative|positive)\s+"
+        r"(?:signal|indicator|factor|input|evidence|sentiment)\b",
+        r"\bnot\s+evidence\s+of\s+(?:a\s+)?"
+        r"(?:bearish|bullish|negative|positive)(?:\s+\w+){0,4}\b",
+        r"\bnot\s+treated\s+as\s+(?:a\s+)?"
+        r"(?:bearish|bullish|negative|positive)(?:\s+\w+){0,4}\b",
+        r"\bnot\s+used\s+as\s+(?:a\s+)?"
+        r"(?:bearish|bullish|negative|positive|directional)(?:\s+\w+){0,4}\b",
+    )
+    scrubbed = text
+    for pattern in safe_patterns:
+        scrubbed = re.sub(pattern, "", scrubbed, flags=re.IGNORECASE)
+    return scrubbed
+
+
 def find_unsupported_optional_source_claims(text: str, state: dict) -> list[str]:
     """Find claims that turn an unavailable source into directional evidence."""
     unavailable = get_unavailable_sources(state)
@@ -252,7 +364,8 @@ def find_unsupported_optional_source_claims(text: str, state: dict) -> list[str]
         generic_gap = re.search(generic_gap_pattern, lowered)
         if not source_named and not generic_gap:
             continue
-        if re.search(absence_pattern, lowered) and re.search(directional_pattern, lowered):
+        directional_scan = _remove_safe_source_gap_treatment_phrases(lowered)
+        if re.search(absence_pattern, lowered) and re.search(directional_pattern, directional_scan):
             claim = segment.strip()
             if claim and claim not in seen:
                 seen.add(claim)
@@ -271,7 +384,8 @@ def find_unsupported_optional_source_claims(text: str, state: dict) -> list[str]
             current_lower,
         ):
             continue
-        if re.search(directional_pattern, current_lower) and current not in seen:
+        directional_scan = _remove_safe_source_gap_treatment_phrases(current_lower)
+        if re.search(directional_pattern, directional_scan) and current not in seen:
             seen.add(current)
             issues.append(current)
     return issues
@@ -287,6 +401,268 @@ def sanitize_unsupported_source_claims(text: str, state: dict) -> tuple[str, boo
     for claim in sorted(claims, key=len, reverse=True):
         sanitized = sanitized.replace(claim, replacement)
     return sanitized, True
+
+
+def _match_count(text: str, patterns: tuple[str, ...]) -> int:
+    if not text:
+        return 0
+    return sum(1 for pattern in patterns if re.search(pattern, text, flags=re.IGNORECASE))
+
+
+def _normalize_labeled_value(value: str, allowed: set[str], default: str) -> str:
+    cleaned = value.strip().strip("*").lower()
+    return cleaned if cleaned in allowed else default.lower()
+
+
+def parse_trader_action(text: str, default: str = "Hold") -> str:
+    if not text:
+        return default
+    patterns = (
+        re.compile(r"^\*\*Action\*\*:\s*(Buy|Hold|Sell)\s*$", re.IGNORECASE | re.MULTILINE),
+        re.compile(r"FINAL TRANSACTION PROPOSAL:\s*\*\*(BUY|HOLD|SELL)\*\*", re.IGNORECASE),
+    )
+    for pattern in patterns:
+        match = pattern.search(text)
+        if match:
+            return _normalize_labeled_value(
+                match.group(1), _TRADER_ACTIONS, default
+            ).capitalize()
+    return default
+
+
+def parse_portfolio_rating(text: str, default: str = "Hold") -> str:
+    if not text:
+        return default
+    patterns = (
+        re.compile(
+            r"^\*\*(?:Rating|Recommendation)\*\*:\s*(Buy|Overweight|Hold|Underweight|Sell)\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+    )
+    for pattern in patterns:
+        match = pattern.search(text)
+        if match:
+            return _normalize_labeled_value(
+                match.group(1), _PORTFOLIO_RATINGS, default
+            ).capitalize()
+    return default
+
+
+def _replace_first(
+    text: str,
+    pattern: re.Pattern[str],
+    replacement: str,
+) -> tuple[str, bool]:
+    updated, count = pattern.subn(replacement, text, count=1)
+    return updated, count > 0
+
+
+def _append_policy_adjustment(text: str, note: str) -> str:
+    if note in text:
+        return text
+    return text.rstrip() + f"\n\n**Policy Adjustment**: {note}"
+
+
+def rewrite_trader_action(text: str, new_action: str, note: str) -> str:
+    updated, action_replaced = _replace_first(
+        text,
+        re.compile(r"(^\*\*Action\*\*:\s*)(Buy|Hold|Sell)(\s*$)", re.IGNORECASE | re.MULTILINE),
+        rf"\g<1>{new_action}\g<3>",
+    )
+    updated, final_replaced = _replace_first(
+        updated,
+        re.compile(
+            r"(FINAL TRANSACTION PROPOSAL:\s*\*\*)(BUY|HOLD|SELL)(\*\*)",
+            re.IGNORECASE,
+        ),
+        rf"\g<1>{new_action.upper()}\g<3>",
+    )
+    if not action_replaced:
+        updated = f"**Action**: {new_action}\n\n{updated.lstrip()}"
+    if not final_replaced:
+        updated = updated.rstrip() + f"\n\nFINAL TRANSACTION PROPOSAL: **{new_action.upper()}**"
+    return _append_policy_adjustment(updated, note)
+
+
+def rewrite_portfolio_rating(
+    text: str,
+    new_rating: str,
+    note: str,
+    *,
+    label: str = "Rating",
+) -> str:
+    updated, rating_replaced = _replace_first(
+        text,
+        re.compile(
+            rf"(^\*\*{label}\*\*:\s*)(Buy|Overweight|Hold|Underweight|Sell)(\s*$)",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+        rf"\g<1>{new_rating}\g<3>",
+    )
+    if not rating_replaced:
+        updated = f"**{label}**: {new_rating}\n\n{updated.lstrip()}"
+    return _append_policy_adjustment(updated, note)
+
+
+def assess_precision_first_evidence(
+    state: dict,
+    *,
+    candidate_text: str = "",
+) -> dict[str, bool | list[str]]:
+    market_report = str(state.get("market_report") or "")
+    evidence_text = "\n\n".join(
+        filter(
+            None,
+            [
+                market_report,
+                str(state.get("news_report") or ""),
+                str(state.get("fundamentals_report") or ""),
+                str(state.get("sentiment_report") or ""),
+            ],
+        )
+    )
+    catalyst_text = "\n\n".join(
+        filter(
+            None,
+            [
+                str(state.get("news_report") or ""),
+                str(state.get("fundamentals_report") or ""),
+                str(state.get("sentiment_report") or ""),
+            ],
+        )
+    )
+    objection_text = "\n\n".join(
+        filter(
+            None,
+            [
+                candidate_text,
+                str(state.get("investment_plan") or ""),
+                str(state.get("trader_investment_plan") or ""),
+                str((state.get("investment_debate_state") or {}).get("history", "")),
+                str((state.get("risk_debate_state") or {}).get("history", "")),
+            ],
+        )
+    )
+
+    positive_catalyst = _match_count(catalyst_text, _POSITIVE_CATALYST_PATTERNS) >= 1
+    aligned_momentum = _match_count(market_report, _MOMENTUM_PATTERNS) >= 2
+    primary_bearish_evidence = (
+        _match_count(catalyst_text, _PRIMARY_BEARISH_EVENT_PATTERNS) >= 1
+        or _match_count(market_report, _PRIMARY_BEARISH_TECHNICAL_PATTERNS) >= 2
+    )
+    confirmation_only = (
+        not primary_bearish_evidence
+        and _match_count(objection_text, _CONFIRMATION_ONLY_PATTERNS) >= 1
+    )
+    macro_only = (
+        not primary_bearish_evidence
+        and _match_count(objection_text, _MACRO_ONLY_PATTERNS) >= 1
+    )
+
+    tags = []
+    if positive_catalyst:
+        tags.append("VERIFIED_POSITIVE_CATALYST")
+    if aligned_momentum:
+        tags.append("ALIGNED_MOMENTUM")
+    if primary_bearish_evidence:
+        tags.append("VERIFIED_PRIMARY_BEAR_EVIDENCE")
+    if confirmation_only:
+        tags.append("CONFIRMATION_ONLY_OBJECTION")
+    if macro_only:
+        tags.append("MACRO_ONLY_OBJECTION")
+
+    return {
+        "positive_catalyst": positive_catalyst,
+        "aligned_momentum": aligned_momentum,
+        "primary_bearish_evidence": primary_bearish_evidence,
+        "confirmation_only_objection": confirmation_only,
+        "macro_only_objection": macro_only,
+        "tags": tags,
+    }
+
+
+def apply_research_manager_policy(plan: str, state: dict) -> tuple[str, list[str]]:
+    evidence = assess_precision_first_evidence(state, candidate_text=plan)
+    recommendation = parse_portfolio_rating(plan, default="Hold")
+    tags = list(evidence["tags"])
+
+    if recommendation in {"Sell", "Underweight"} and not evidence["primary_bearish_evidence"]:
+        note = (
+            "Reframed to Hold because the analyst reports do not show verified "
+            "primary ticker-specific bearish evidence for a short-term bearish call."
+        )
+        return (
+            rewrite_portfolio_rating(plan, "Hold", note, label="Recommendation"),
+            tags + ["SELL_GATED_NO_PRIMARY_BEAR"],
+        )
+
+    if recommendation in {"Buy", "Overweight"} and not (
+        evidence["positive_catalyst"] or evidence["aligned_momentum"]
+    ):
+        note = (
+            "Reframed to Hold because the analyst reports do not show a verified "
+            "positive catalyst or aligned momentum for a precision-first bullish call."
+        )
+        return (
+            rewrite_portfolio_rating(plan, "Hold", note, label="Recommendation"),
+            tags + ["BUY_GATED_NO_EDGE"],
+        )
+
+    return plan, tags
+
+
+def apply_trader_policy(plan: str, state: dict) -> tuple[str, list[str]]:
+    evidence = assess_precision_first_evidence(state, candidate_text=plan)
+    action = parse_trader_action(plan, default="Hold")
+    tags = list(evidence["tags"])
+
+    if action == "Sell" and not evidence["primary_bearish_evidence"]:
+        note = (
+            "Reframed to Hold because the analyst reports do not show verified "
+            "primary ticker-specific bearish evidence for a short-term SELL call."
+        )
+        return rewrite_trader_action(plan, "Hold", note), tags + ["SELL_GATED_NO_PRIMARY_BEAR"]
+
+    if action == "Buy" and not (
+        evidence["positive_catalyst"] or evidence["aligned_momentum"]
+    ):
+        note = (
+            "Reframed to Hold because the analyst reports do not show a verified "
+            "positive catalyst or aligned momentum for a precision-first BUY call."
+        )
+        return rewrite_trader_action(plan, "Hold", note), tags + ["BUY_GATED_NO_EDGE"]
+
+    return plan, tags
+
+
+def apply_portfolio_manager_policy(decision: str, state: dict) -> tuple[str, list[str]]:
+    evidence = assess_precision_first_evidence(state, candidate_text=decision)
+    rating = parse_portfolio_rating(decision, default="Hold")
+    tags = list(evidence["tags"])
+
+    if rating in {"Sell", "Underweight"} and not evidence["primary_bearish_evidence"]:
+        note = (
+            "Reframed to Hold because the analyst reports do not show verified "
+            "primary ticker-specific bearish evidence for a short-term bearish rating."
+        )
+        return (
+            rewrite_portfolio_rating(decision, "Hold", note, label="Rating"),
+            tags + ["SELL_GATED_NO_PRIMARY_BEAR"],
+        )
+
+    if rating in {"Buy", "Overweight"} and not (
+        evidence["positive_catalyst"] or evidence["aligned_momentum"]
+    ):
+        note = (
+            "Reframed to Hold because the analyst reports do not show a verified "
+            "positive catalyst or aligned momentum for a precision-first bullish rating."
+        )
+        return (
+            rewrite_portfolio_rating(decision, "Hold", note, label="Rating"),
+            tags + ["BUY_GATED_NO_EDGE"],
+        )
+
+    return decision, tags
 
 def create_msg_delete():
     def delete_messages(state):

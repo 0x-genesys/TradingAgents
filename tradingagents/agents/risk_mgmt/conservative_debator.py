@@ -24,7 +24,7 @@ def create_conservative_debator(llm):
         ctx = state.get("trade_context_note", "")
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nEvaluate risk for THIS specific trade horizon. Is the fixed stop likely to trigger before the fixed target in current volatility? Is there exit liquidity for a short-term trade?" if ctx else ""
 
-        prompt = f"""{ctx_line}As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
+        prompt = f"""{ctx_line}As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. A bearish objection must be anchored in verified ticker-specific downside evidence that can matter inside this trade window. Missing confirmation alone or broad macro caution are not enough to justify a SELL stance. Here is the trader's decision:
 
 {trader_decision}
 
@@ -36,7 +36,7 @@ Latest World Affairs Report: {news_report}
 Company Fundamentals Report: {fundamentals_report}
 Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the neutral analyst: {current_neutral_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
 
-Engage by questioning their optimism and emphasizing the potential downsides they may have overlooked. Address each of their counterpoints to showcase why a conservative stance is ultimately the safest path for the firm's assets. Focus on debating and critiquing their arguments to demonstrate the strength of a low-risk strategy over their approaches. Output conversationally as if you are speaking without any special formatting.""" + get_data_quality_instruction(state) + get_language_instruction()
+Engage by questioning their optimism and emphasizing the potential downsides they may have overlooked. Address each of their counterpoints to showcase why a conservative stance is ultimately the safest path for the firm's assets. Focus on debating and critiquing their arguments to demonstrate the strength of a low-risk strategy over their approaches. If the downside evidence is weak, say HOLD instead of stretching to SELL. Output conversationally as if you are speaking without any special formatting.""" + get_data_quality_instruction(state) + get_language_instruction()
 
         response = llm.invoke(prompt)
 

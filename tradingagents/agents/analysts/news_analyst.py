@@ -126,7 +126,9 @@ usable evidence in another source, such as Google News OK.
 
 Do not search for ticker-specific news again. The only available tool is
 get_global_news, which may add broader macroeconomic evidence that could affect
-this stock within the stated trade horizon.
+this stock within the stated trade horizon. Only include macro evidence when you
+can explain a direct transmission path to this ticker within the horizon. If you
+cannot make that connection, omit the macro item.
 
 {_frozen_ticker_news(snapshot)}
 

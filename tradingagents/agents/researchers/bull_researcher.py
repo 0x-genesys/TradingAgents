@@ -27,12 +27,12 @@ def create_bull_researcher(llm):
         ctx = state.get("trade_context_note", "")
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame your bull argument for THIS specific trade horizon. Assess whether evidence supports reaching the fixed target before the fixed stop, independently from any upstream selector. Emphasis: short-term momentum catalyst, not multi-year growth story." if ctx else ""
 
-        prompt = f"""{ctx_line}You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
+        prompt = f"""{ctx_line}You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case for this short-term trade, emphasizing verified positive catalysts and aligned momentum. Do not rely on generic mean reversion, vague optimism, or missing-source speculation. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
 Key points to focus on:
 - Growth Potential: Highlight the company's market opportunities, revenue projections, and scalability.
 - Competitive Advantages: Emphasize factors like unique products, strong branding, or dominant market positioning.
-- Positive Indicators: Use financial health, industry trends, and recent positive news as evidence.
+- Positive Indicators: Use verified company-specific catalysts, favorable short-term technical alignment, and recent positive news as evidence.
 - Bear Counterpoints: Critically analyze the bear argument with specific data and sound reasoning, addressing concerns thoroughly and showing why the bull perspective holds stronger merit.
 - Engagement: Present your argument in a conversational style, engaging directly with the bear analyst's points and debating effectively rather than just listing data.
 
