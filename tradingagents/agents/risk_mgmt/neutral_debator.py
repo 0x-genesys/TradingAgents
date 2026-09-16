@@ -23,8 +23,10 @@ def create_neutral_debator(llm):
 
         ctx = state.get("trade_context_note", "")
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nProvide a balanced assessment for THIS specific trade horizon. Weigh the probability of reaching the fixed target against the probability of hitting the fixed stop within the trade window." if ctx else ""
+        lstm_ctx = state.get("lstm_context_note", "")
+        lstm_line = f"\n\n---\n{lstm_ctx}" if lstm_ctx else ""
 
-        prompt = f"""{ctx_line}As the Neutral Risk Analyst, your role is to provide a balanced perspective, weighing both the potential benefits and risks of the trader's decision or plan. You prioritize a well-rounded approach, evaluating the upsides and downsides while factoring in broader market trends, potential economic shifts, and diversification strategies. Default to HOLD when the evidence does not show a clear short-term edge. Here is the trader's decision:
+        prompt = f"""{ctx_line}{lstm_line}As the Neutral Risk Analyst, your role is to provide a balanced perspective, weighing both the potential benefits and risks of the trader's decision or plan. You prioritize a well-rounded approach, evaluating the upsides and downsides while factoring in broader market trends, potential economic shifts, and diversification strategies. When LSTM evidence is supplied, weigh its quantified pullback-reversal thesis against verified current risks without treating the model as a prescribed action. Default to HOLD when the evidence does not show a clear short-term edge. Here is the trader's decision:
 
 {trader_decision}
 

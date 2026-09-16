@@ -26,23 +26,31 @@ def create_trader(llm):
     def trader_node(state, name):
         company_name = state["company_of_interest"]
         asset_type = state.get("asset_type", "stock")
-        instrument_context = build_instrument_context(company_name, asset_type)
+        instrument_context = build_instrument_context(
+            company_name,
+            asset_type,
+            lstm_context_available=bool(state.get("lstm_signal_context")),
+        )
         investment_plan = state["investment_plan"]
 
         ctx = state.get("trade_context_note", "")
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nEvaluate whether the GIVEN entry, target, and stop work for the GIVEN horizon. These levels are constraints — assess whether the target can be reached before the stop, not set ideal replacement levels. If you populate the structured Entry Price or Stop Loss fields, copy the supplied entry and stop exactly; never substitute a technical support, resistance, or early-exit level for the fixed strategy stop." if ctx else ""
+        lstm_ctx = state.get("lstm_context_note", "")
+        lstm_line = f"\n\n---\n{lstm_ctx}" if lstm_ctx else ""
 
         messages = [
             {
                 "role": "system",
                 "content": (
                     ctx_line
+                    + lstm_line
                     + "You are a trading agent analyzing market data to make short-term trading decisions. "
                     "Anchor your reasoning in the analysts' reports and the research plan. "
                     "Use Hold as the default when the setup lacks a proven edge. "
                     "A BUY requires either a verified positive catalyst or clearly aligned momentum within the trade window. "
                     "A SELL requires verified primary ticker-specific downside evidence that can matter within the trade window. "
-                    "Do not turn missing confirmation alone or broad macro caution into a SELL call."
+                    "Do not turn missing confirmation alone or broad macro caution into a SELL call. "
+                    "When LSTM evidence is supplied, fill every LSTM thesis field and explain agreement or disagreement using verified current evidence."
                     + get_data_quality_instruction(state)
                     + get_language_instruction()
                 ),

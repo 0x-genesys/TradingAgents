@@ -20,6 +20,7 @@ def create_fundamentals_analyst(llm):
         instrument_context = build_instrument_context(
             state["company_of_interest"],
             canonical_name=snapshot.get("company_name"),
+            lstm_context_available=False,
         )
 
         tools = [
@@ -30,7 +31,7 @@ def create_fundamentals_analyst(llm):
         ]
 
         ctx = state.get("trade_context_note", "")
-        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame ALL analysis for THIS specific trade horizon and fixed target/stop objective. For short-term trades, skip valuation multiples (P/E, EV/EBITDA) — focus on near-term catalysts and price relative to recent earnings." if ctx else ""
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame ALL analysis for THIS specific trade horizon and fixed target/stop objective. For short-term trades, skip valuation multiples (P/E, EV/EBITDA). Prioritize the latest earnings, revenue/profit/margin trend, debt, cash, liquidity, guidance, and dated corporate events that can matter inside the horizon." if ctx else ""
 
         system_message = (
             ctx_line

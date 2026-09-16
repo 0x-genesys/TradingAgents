@@ -86,6 +86,7 @@ def create_sentiment_analyst(llm):
             ticker,
             state.get("asset_type", "stock"),
             canonical_name=company_name,
+            lstm_context_available=False,
         )
         system_message = _build_system_message(
             ticker=ticker,

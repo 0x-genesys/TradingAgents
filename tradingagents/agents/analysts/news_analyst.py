@@ -167,6 +167,7 @@ def create_news_analyst(llm):
             state["company_of_interest"],
             asset_type,
             canonical_name=snapshot.get("company_name"),
+            lstm_context_available=False,
         )
 
         if asset_type == "stock":
@@ -182,7 +183,6 @@ def create_news_analyst(llm):
                 asset_label,
                 state.get("trade_context_note", ""),
             )
-
         prompt = ChatPromptTemplate.from_messages(
             [
                 (

@@ -14,6 +14,7 @@ from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
 from tradingagents.agents.utils.agent_utils import (
     apply_portfolio_manager_policy,
     build_instrument_context,
+    find_trade_arithmetic_issues,
     find_unsupported_optional_source_claims,
     find_unsupported_upstream_claims,
     get_data_quality_instruction,
@@ -30,7 +31,10 @@ def create_portfolio_manager(llm):
     structured_llm = bind_structured(llm, PortfolioDecision, "Portfolio Manager")
 
     def portfolio_manager_node(state) -> dict:
-        instrument_context = build_instrument_context(state["company_of_interest"])
+        instrument_context = build_instrument_context(
+            state["company_of_interest"],
+            lstm_context_available=bool(state.get("lstm_signal_context")),
+        )
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
@@ -46,8 +50,10 @@ def create_portfolio_manager(llm):
 
         ctx = state.get("trade_context_note", "")
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nRate this as a SHORT-TERM trade, not a long-term investment. Valuation multiples (P/E, EV/EBITDA) are largely irrelevant for this duration. The decision objective is to reach the fixed target before the fixed stop within the given horizon; do not invent replacement levels." if ctx else ""
+        lstm_ctx = state.get("lstm_context_note", "")
+        lstm_line = f"\n\n---\n{lstm_ctx}" if lstm_ctx else ""
 
-        prompt = f"""{ctx_line}As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
+        prompt = f"""{ctx_line}{lstm_line}As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision. When LSTM evidence is supplied, answer whether the pullback reversal is supported, whether established momentum remains intact, and whether the fixed target can occur before the stop within the horizon. Fill every LSTM thesis field. The final rating remains your independent decision.
 
 {instrument_context}
 
@@ -82,7 +88,8 @@ Be decisive and ground every conclusion in specific evidence from the analysts. 
         tags = list(state.get("data_quality_tags") or [])
         unsupported_claims = (
             find_unsupported_optional_source_claims(final_trade_decision, state)
-            + find_unsupported_upstream_claims(final_trade_decision)
+            + find_unsupported_upstream_claims(final_trade_decision, state)
+            + find_trade_arithmetic_issues(final_trade_decision, state)
         )
         if unsupported_claims:
             repair_prompt = (
@@ -90,7 +97,9 @@ Be decisive and ground every conclusion in specific evidence from the analysts. 
                 + "\n\nYour previous draft used unsupported evidence. Rewrite the complete "
                 "decision once. Preserve valid ticker-specific evidence and the rating only if "
                 "verified evidence supports it. Do not use source absence or an invented upstream "
-                "selector/model signal as evidence. Problematic draft excerpts:\n- "
+                "selector/model signal as evidence, and fix any target/stop arithmetic "
+                "without changing the rating unless the corrected evidence requires it. "
+                "Problematic draft excerpts:\n- "
                 + "\n- ".join(unsupported_claims)
             )
             final_trade_decision = invoke_structured_or_freetext(
@@ -102,7 +111,8 @@ Be decisive and ground every conclusion in specific evidence from the analysts. 
             )
             remaining_claims = (
                 find_unsupported_optional_source_claims(final_trade_decision, state)
-                + find_unsupported_upstream_claims(final_trade_decision)
+                + find_unsupported_upstream_claims(final_trade_decision, state)
+                + find_trade_arithmetic_issues(final_trade_decision, state)
             )
             if remaining_claims:
                 tags.append("INVALID_FINAL_GROUNDING")

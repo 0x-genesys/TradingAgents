@@ -42,6 +42,7 @@ def build_instrument_context(
     ticker: str,
     asset_type: str = "stock",
     canonical_name: str | None = None,
+    lstm_context_available: bool = False,
 ) -> str:
     """Describe the exact instrument so agents preserve exchange-qualified tickers."""
     instrument_label = "asset" if asset_type == "crypto" else "instrument"
@@ -56,15 +57,23 @@ def build_instrument_context(
         if canonical_name and asset_type == "stock"
         else ""
     )
+    upstream_note = (
+        " Structured current-run LSTM evidence is supplied separately. Use only "
+        "that evidence and do not invent prior model runs, outcomes, or features."
+        if lstm_context_available
+        else (
+            " Analyze the instrument independently. No upstream selector or prediction "
+            "model output is supplied. Do not infer or mention an LSTM signal, model "
+            "score, rank, features, selection history, or selection reason."
+        )
+    )
     return (
         f"The {instrument_label} to analyze is `{ticker}`. "
         "Use this exact ticker in every tool call, report, and recommendation, "
         "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `-USD`)."
         + identity
         + extra_hint
-        + " Analyze the instrument independently. No upstream selector or prediction "
-        "model output is supplied. Do not infer or mention an LSTM signal, model "
-        "score, rank, features, selection history, or selection reason."
+        + upstream_note
     )
 
 
@@ -221,12 +230,37 @@ def get_unavailable_sources(state: dict) -> list[str]:
 def get_data_quality_instruction(state: dict) -> str:
     """Tell every downstream agent how to preserve source and model independence."""
     unavailable = get_unavailable_sources(state)
-    instructions = (
-        "\n\nUPSTREAM INDEPENDENCE POLICY: No upstream selector or prediction model "
-        "output is available to you. Assess only the ticker-specific evidence in this "
-        "analysis. Do not infer or mention an LSTM signal, model score, rank, features, "
-        "selection history, or selection reason."
-    )
+    target_pct = state.get("profit_target_pct")
+    stop_pct = state.get("stop_loss_pct")
+    payoff_line = ""
+    if isinstance(target_pct, (int, float)) and isinstance(stop_pct, (int, float)):
+        target = abs(float(target_pct))
+        stop = abs(float(stop_pct))
+        if target > 0 and stop > 0:
+            breakeven = stop / (target + stop)
+            payoff_line = (
+                f" For payoff arithmetic, a +{target * 100:.2f}% target versus "
+                f"-{stop * 100:.2f}% stop requires more than "
+                f"{breakeven * 100:.2f}% target hits before costs."
+            )
+    if state.get("lstm_signal_context"):
+        instructions = (
+            "\n\nLSTM EVIDENCE POLICY: The structured context contains factual current-run "
+            "model evidence. Give it meaningful weight but make an independent decision. "
+            "Do not invent prior runs, historical outcomes, probabilities, features, or "
+            "selection reasons that are absent from the supplied context. Short-term "
+            "weakness may be the expected pullback, so test whether established momentum "
+            "has structurally failed before treating that weakness as contradictory."
+            + payoff_line
+        )
+    else:
+        instructions = (
+            "\n\nUPSTREAM INDEPENDENCE POLICY: No upstream selector or prediction model "
+            "output is available to you. Assess only the ticker-specific evidence in this "
+            "analysis. Do not infer or mention an LSTM signal, model score, rank, features, "
+            "selection history, or selection reason."
+            + payoff_line
+        )
     if unavailable:
         source_list = ", ".join(unavailable)
         instructions += (
@@ -241,8 +275,20 @@ def get_data_quality_instruction(state: dict) -> str:
     return instructions
 
 
-def find_unsupported_upstream_claims(text: str) -> list[str]:
+def find_unsupported_upstream_claims(text: str, state: dict | None = None) -> list[str]:
     """Find claims about selector/model inputs that TradingAgents never receives."""
+    if state and state.get("lstm_signal_context"):
+        forbidden_history = re.compile(
+            r"\bprior (?:LSTM|model|TA|TradingAgents?) (?:run|score|rank|decision|outcome)s?\b|"
+            r"\bprevious (?:LSTM|model|TA|TradingAgents?) (?:run|score|rank|decision|outcome)s?\b|"
+            r"\bselection history\b|\bhistorical (?:target|trade|signal) outcomes?\b",
+            flags=re.IGNORECASE,
+        )
+        return [
+            segment.strip()
+            for segment in re.split(r"(?<=[.!?])\s+|\n{2,}", text or "")
+            if segment.strip() and forbidden_history.search(segment)
+        ]
     if not text:
         return []
 
@@ -268,9 +314,48 @@ def find_unsupported_upstream_claims(text: str) -> list[str]:
     return issues
 
 
-def sanitize_unsupported_upstream_claims(text: str) -> tuple[str, bool]:
+def _required_break_even_pct(state: dict) -> float | None:
+    target_pct = state.get("profit_target_pct")
+    stop_pct = state.get("stop_loss_pct")
+    if not isinstance(target_pct, (int, float)) or not isinstance(stop_pct, (int, float)):
+        return None
+    target = abs(float(target_pct))
+    stop = abs(float(stop_pct))
+    if target <= 0 or stop <= 0:
+        return None
+    return stop / (target + stop) * 100.0
+
+
+def find_trade_arithmetic_issues(text: str, state: dict) -> list[str]:
+    """Find payoff arithmetic claims that contradict the fixed target/stop."""
+    required_pct = _required_break_even_pct(state)
+    if not text or required_pct is None:
+        return []
+    issues = []
+    seen = set()
+    break_even_pattern = re.compile(
+        r"\b(?:break[ -]?even|breakeven|positive expectancy|profitable)\b",
+        flags=re.IGNORECASE,
+    )
+    pct_pattern = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+    for segment in re.split(r"(?<=[.!?])\s+|\n{2,}", text):
+        claim = segment.strip()
+        if not claim or not break_even_pattern.search(claim):
+            continue
+        percentages = [float(match.group(1)) for match in pct_pattern.finditer(claim)]
+        if any(value < required_pct - 0.5 for value in percentages):
+            if claim not in seen:
+                seen.add(claim)
+                issues.append(claim)
+    return issues
+
+
+def sanitize_unsupported_upstream_claims(
+    text: str,
+    state: dict | None = None,
+) -> tuple[str, bool]:
     """Remove invented upstream selector/model evidence from an agent response."""
-    claims = find_unsupported_upstream_claims(text)
+    claims = find_unsupported_upstream_claims(text, state)
     if not claims:
         return text, False
     sanitized = text
@@ -283,7 +368,7 @@ def sanitize_unsupported_upstream_claims(text: str) -> tuple[str, bool]:
 def sanitize_agent_output(text: str, state: dict) -> tuple[str, list[str]]:
     """Sanitize source-gap and upstream-model claims and return quality tags."""
     sanitized, removed_source = sanitize_unsupported_source_claims(text, state)
-    sanitized, removed_upstream = sanitize_unsupported_upstream_claims(sanitized)
+    sanitized, removed_upstream = sanitize_unsupported_upstream_claims(sanitized, state)
     tags = []
     if removed_source:
         tags.append("REMOVED_UNSUPPORTED_SOURCE_CLAIM")
@@ -582,6 +667,8 @@ def assess_precision_first_evidence(
 
 
 def apply_research_manager_policy(plan: str, state: dict) -> tuple[str, list[str]]:
+    if state.get("lstm_signal_context"):
+        return plan, []
     evidence = assess_precision_first_evidence(state, candidate_text=plan)
     recommendation = parse_portfolio_rating(plan, default="Hold")
     tags = list(evidence["tags"])
@@ -612,6 +699,8 @@ def apply_research_manager_policy(plan: str, state: dict) -> tuple[str, list[str
 
 
 def apply_trader_policy(plan: str, state: dict) -> tuple[str, list[str]]:
+    if state.get("lstm_signal_context"):
+        return plan, []
     evidence = assess_precision_first_evidence(state, candidate_text=plan)
     action = parse_trader_action(plan, default="Hold")
     tags = list(evidence["tags"])
@@ -636,6 +725,8 @@ def apply_trader_policy(plan: str, state: dict) -> tuple[str, list[str]]:
 
 
 def apply_portfolio_manager_policy(decision: str, state: dict) -> tuple[str, list[str]]:
+    if state.get("lstm_signal_context"):
+        return decision, []
     evidence = assess_precision_first_evidence(state, candidate_text=decision)
     rating = parse_portfolio_rating(decision, default="Hold")
     tags = list(evidence["tags"])

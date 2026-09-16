@@ -25,9 +25,11 @@ def create_bull_researcher(llm):
         )
 
         ctx = state.get("trade_context_note", "")
-        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame your bull argument for THIS specific trade horizon. Assess whether evidence supports reaching the fixed target before the fixed stop, independently from any upstream selector. Emphasis: short-term momentum catalyst, not multi-year growth story." if ctx else ""
+        ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame your bull argument for THIS specific trade horizon. Assess whether evidence supports reaching the fixed target before the fixed stop. Treat supplied LSTM evidence as meaningful quantitative evidence, not a prescribed action. Emphasis: short-term momentum catalyst, not multi-year growth story." if ctx else ""
+        lstm_ctx = state.get("lstm_context_note", "")
+        lstm_line = f"\n\n---\n{lstm_ctx}" if lstm_ctx else ""
 
-        prompt = f"""{ctx_line}You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case for this short-term trade, emphasizing verified positive catalysts and aligned momentum. Do not rely on generic mean reversion, vague optimism, or missing-source speculation. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
+        prompt = f"""{ctx_line}{lstm_line}You are a Bull Analyst advocating for investing in the {target_label}. Your task is to build a strong, evidence-based case for this short-term trade, emphasizing verified positive catalysts and aligned momentum. When LSTM evidence is supplied, evaluate whether current evidence supports its pullback-reversal thesis; do not assume short-term weakness alone invalidates it. Do not rely on generic mean reversion, vague optimism, or missing-source speculation. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
 
 Key points to focus on:
 - Growth Potential: Highlight the company's market opportunities, revenue projections, and scalability.
