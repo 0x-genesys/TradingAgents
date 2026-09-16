@@ -33,3 +33,20 @@ def test_empty_market_response_gets_one_synthesis_retry() -> None:
 
     assert result["market_report"].startswith("Supported technical market report")
     assert result["data_quality_tags"] == ["REPAIRED_MARKET_REPORT"]
+
+
+@pytest.mark.parametrize("ticker,draft", [
+    ("NMDC.NS", '<tool_code>\nprint(get_stock_data(ticker="NMDC.NS"))\n</tool_code>'),
+    ("ABB.NS", '<tool_code>\nprint(get_stock_data(ticker="ABB.NS", start_date="2026-09-09", end_date="2026-09-16"))\n</tool_code>'),
+    ("ABB.NS", '```python\nget_stock_data("ABB.NS")\n```'),
+])
+def test_september_16_tool_text_is_repaired_or_fails(ticker, draft):
+    state = {"company_of_interest": ticker, "trade_date": "2026-09-16",
+             "messages": [HumanMessage(content=ticker)]}
+    valid = "Technical evidence: price remains below SMA50; reversal is unconfirmed."
+    result = create_market_analyst(ToolCompatibleFakeChatModel(responses=[draft, valid]))(state)
+    assert result["market_report"] == valid
+    assert result["messages"][-1].content == valid
+    assert "REPAIRED_MARKET_REPORT" in result["data_quality_tags"]
+    with pytest.raises(RuntimeError, match="INVALID_MARKET_REPORT"):
+        create_market_analyst(ToolCompatibleFakeChatModel(responses=[draft, draft]))(state)

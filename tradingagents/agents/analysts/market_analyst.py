@@ -1,3 +1,5 @@
+import re
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
@@ -8,6 +10,15 @@ from tradingagents.agents.utils.agent_utils import (
     sanitize_agent_output,
 )
 from tradingagents.dataflows.config import get_config
+
+
+def malformed_market_report(report: str) -> bool:
+    """Tool-call text is not a completed technical analysis."""
+    return not report.strip() or bool(re.search(
+        r"<tool_code>|<tool_call>|```(?:python|json)|"
+        r"\b(?:print\s*\(|get_stock_data\s*\(|get_indicators\s*\()",
+        report, re.IGNORECASE,
+    ))
 
 
 def create_market_analyst(llm):
@@ -93,13 +104,13 @@ Volume-Based Indicators:
 
         if len(result.tool_calls) == 0:
             report = str(result.content or "").strip()
-            if not report:
+            if malformed_market_report(report):
                 synthesis_prompt = ChatPromptTemplate.from_messages(
                     [
                         (
                             "system",
-                            "The market analyst returned an empty final response after "
-                            "using tools. Using only the prior tool outputs, write the "
+                            "The market analyst returned an empty or malformed final response. "
+                            "Tool-code text is not an executed tool call. Using only the prior tool outputs, write the "
                             "complete technical market report now. Do not call tools and "
                             "do not invent unavailable values.\n{system_message}\n"
                             "{instrument_context}",
@@ -116,10 +127,15 @@ Volume-Based Indicators:
                 )
                 repaired = (synthesis_prompt | llm).invoke(state["messages"])
                 repaired_report = str(repaired.content or "").strip()
-                if repaired_report:
+                if not repaired.tool_calls and not malformed_market_report(repaired_report):
                     report = repaired_report
                     result = repaired
                     tags.append("REPAIRED_MARKET_REPORT")
+                else:
+                    raise RuntimeError(
+                        f"INVALID_MARKET_REPORT for {state['company_of_interest']}: "
+                        "empty or tool-code response after one synthesis repair"
+                    )
 
         report, output_tags = sanitize_agent_output(report, state)
         tags.extend(output_tags)
