@@ -6,6 +6,12 @@ from tradingagents.agents.utils.agent_states import (
     InvestDebateState,
     RiskDebateState,
 )
+from tradingagents.agents.utils.lstm_context import (
+    render_lstm_compact_context,
+    render_lstm_market_context,
+    render_lstm_report,
+    validate_lstm_signal_context,
+)
 
 
 class Propagator:
@@ -26,6 +32,7 @@ class Propagator:
         profit_target_pct: Optional[float] = None,
         stop_loss_pct: Optional[float] = None,
         trade_strategy: Optional[str] = None,
+        lstm_signal_context: Optional[Dict[str, Any]] = None,
         sentiment_source_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph.
@@ -35,6 +42,54 @@ class Propagator:
         analysis for the specific trade parameters.  When omitted (None), the
         default long-term analysis is used unchanged.
         """
+        lstm_context_note = ""
+        lstm_market_context_note = ""
+        lstm_quantitative_evidence = ""
+        if lstm_signal_context:
+            validate_lstm_signal_context(
+                lstm_signal_context,
+                company_name,
+                str(trade_date),
+            )
+            signal = lstm_signal_context["signal"]
+            contract = lstm_signal_context["strategy_contract"]
+            expected = {
+                "entry_price": float(signal["entry_price"]),
+                "profit_target_pct": float(contract["decision_target_pct"]),
+                "stop_loss_pct": float(contract["stop_loss_pct"]),
+                "trade_horizon_days": int(
+                    contract["maximum_horizon_exchange_sessions"]
+                ),
+                "trade_strategy": str(contract["setup"]),
+            }
+            supplied = {
+                "entry_price": entry_price,
+                "profit_target_pct": profit_target_pct,
+                "stop_loss_pct": stop_loss_pct,
+                "trade_horizon_days": trade_horizon_days,
+                "trade_strategy": trade_strategy,
+            }
+            for field_name, expected_value in expected.items():
+                supplied_value = supplied[field_name]
+                if supplied_value is None:
+                    continue
+                if isinstance(expected_value, float):
+                    matches = abs(float(supplied_value) - expected_value) <= 1e-9
+                else:
+                    matches = supplied_value == expected_value
+                if not matches:
+                    raise ValueError(
+                        f"{field_name} conflicts with canonical LSTM signal context"
+                    )
+            entry_price = expected["entry_price"]
+            profit_target_pct = expected["profit_target_pct"]
+            stop_loss_pct = expected["stop_loss_pct"]
+            trade_horizon_days = expected["trade_horizon_days"]
+            trade_strategy = expected["trade_strategy"]
+            lstm_context_note = render_lstm_compact_context(lstm_signal_context)
+            lstm_market_context_note = render_lstm_market_context(lstm_signal_context)
+            lstm_quantitative_evidence = render_lstm_report(lstm_signal_context)
+
         # Build human-readable trade context note if horizon is provided.
         trade_context_note = ""
         if trade_horizon_days is not None:
@@ -88,6 +143,10 @@ class Propagator:
             "stop_loss_pct": stop_loss_pct,
             "trade_strategy": trade_strategy,
             "trade_context_note": trade_context_note,
+            "lstm_signal_context": lstm_signal_context or {},
+            "lstm_context_note": lstm_context_note,
+            "lstm_market_context_note": lstm_market_context_note,
+            "lstm_quantitative_evidence": lstm_quantitative_evidence,
             "analysis_status": "COMPLETE",
             "data_quality_tags": list(
                 (sentiment_source_snapshot or {}).get("data_quality_tags", [])

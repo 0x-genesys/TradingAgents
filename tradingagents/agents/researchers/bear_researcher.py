@@ -26,8 +26,10 @@ def create_bear_researcher(llm):
 
         ctx = state.get("trade_context_note", "")
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame your bear argument for THIS specific trade horizon. Focus on whether risks cause the fixed stop before the fixed target, including liquidity and momentum failure, not long-term structural concerns." if ctx else ""
+        lstm_ctx = state.get("lstm_context_note", "")
+        lstm_line = f"\n\n---\n{lstm_ctx}" if lstm_ctx else ""
 
-        prompt = f"""{ctx_line}You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators that can realistically matter within this trade window. Do not rely on missing confirmation alone, broad macro caution without a direct ticker transmission path, or missing-source speculation. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
+        prompt = f"""{ctx_line}{lstm_line}You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators that can realistically matter within this trade window. When LSTM evidence is supplied, test whether verified evidence structurally invalidates its pullback-reversal thesis. Do not treat expected pullback symptoms, missing confirmation alone, broad macro caution without a direct ticker transmission path, or missing-source speculation as sufficient invalidation. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
 
 Key points to focus on:
 

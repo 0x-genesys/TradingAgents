@@ -11,11 +11,10 @@ back gracefully to free-text generation.
 from __future__ import annotations
 
 from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
+from tradingagents.agents.utils.grounding import repair_decision_grounding
 from tradingagents.agents.utils.agent_utils import (
     apply_portfolio_manager_policy,
     build_instrument_context,
-    find_unsupported_optional_source_claims,
-    find_unsupported_upstream_claims,
     get_data_quality_instruction,
     get_language_instruction,
     sanitize_agent_output,
@@ -30,7 +29,10 @@ def create_portfolio_manager(llm):
     structured_llm = bind_structured(llm, PortfolioDecision, "Portfolio Manager")
 
     def portfolio_manager_node(state) -> dict:
-        instrument_context = build_instrument_context(state["company_of_interest"])
+        instrument_context = build_instrument_context(
+            state["company_of_interest"],
+            lstm_context_available=bool(state.get("lstm_signal_context")),
+        )
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
@@ -46,8 +48,10 @@ def create_portfolio_manager(llm):
 
         ctx = state.get("trade_context_note", "")
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nRate this as a SHORT-TERM trade, not a long-term investment. Valuation multiples (P/E, EV/EBITDA) are largely irrelevant for this duration. The decision objective is to reach the fixed target before the fixed stop within the given horizon; do not invent replacement levels." if ctx else ""
+        lstm_ctx = state.get("lstm_context_note", "")
+        lstm_line = f"\n\n---\n{lstm_ctx}" if lstm_ctx else ""
 
-        prompt = f"""{ctx_line}As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
+        prompt = f"""{ctx_line}{lstm_line}As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision. When LSTM evidence is supplied, answer whether the pullback reversal is supported, whether established momentum remains intact, and whether the fixed target can occur before the stop within the horizon. Fill every LSTM thesis field. The final rating remains your independent decision.
 
 {instrument_context}
 
@@ -80,38 +84,13 @@ Be decisive and ground every conclusion in specific evidence from the analysts. 
         )
 
         tags = list(state.get("data_quality_tags") or [])
-        unsupported_claims = (
-            find_unsupported_optional_source_claims(final_trade_decision, state)
-            + find_unsupported_upstream_claims(final_trade_decision)
+        final_trade_decision, grounding_tags = repair_decision_grounding(
+            final_trade_decision, state, prompt, structured_llm, llm,
+            render_pm_decision, "Portfolio Manager",
         )
-        if unsupported_claims:
-            repair_prompt = (
-                prompt
-                + "\n\nYour previous draft used unsupported evidence. Rewrite the complete "
-                "decision once. Preserve valid ticker-specific evidence and the rating only if "
-                "verified evidence supports it. Do not use source absence or an invented upstream "
-                "selector/model signal as evidence. Problematic draft excerpts:\n- "
-                + "\n- ".join(unsupported_claims)
-            )
-            final_trade_decision = invoke_structured_or_freetext(
-                structured_llm,
-                llm,
-                repair_prompt,
-                render_pm_decision,
-                "Portfolio Manager grounding repair",
-            )
-            remaining_claims = (
-                find_unsupported_optional_source_claims(final_trade_decision, state)
-                + find_unsupported_upstream_claims(final_trade_decision)
-            )
-            if remaining_claims:
-                tags.append("INVALID_FINAL_GROUNDING")
-                final_trade_decision, output_tags = sanitize_agent_output(
-                    final_trade_decision, state
-                )
-                tags.extend(output_tags)
-            else:
-                tags.append("REPAIRED_FINAL_GROUNDING")
+        tags.extend(grounding_tags)
+        final_trade_decision, output_tags = sanitize_agent_output(final_trade_decision, state)
+        tags.extend(output_tags)
 
         final_trade_decision, policy_tags = apply_portfolio_manager_policy(
             final_trade_decision, state

@@ -380,7 +380,8 @@ class TradingAgentsGraph:
                   entry_price: Optional[float] = None,
                   profit_target_pct: Optional[float] = None,
                   stop_loss_pct: Optional[float] = None,
-                  trade_strategy: Optional[str] = None):
+                  trade_strategy: Optional[str] = None,
+                  lstm_signal_context: Optional[Dict[str, Any]] = None):
         """Run the trading agents graph for a company on a specific date.
 
         ``asset_type`` selects between the stock pipeline (default) and the
@@ -427,6 +428,7 @@ class TradingAgentsGraph:
                 profit_target_pct=profit_target_pct,
                 stop_loss_pct=stop_loss_pct,
                 trade_strategy=trade_strategy,
+                lstm_signal_context=lstm_signal_context,
             )
         finally:
             if self._checkpointer_ctx is not None:
@@ -452,14 +454,19 @@ class TradingAgentsGraph:
                    entry_price: Optional[float] = None,
                    profit_target_pct: Optional[float] = None,
                    stop_loss_pct: Optional[float] = None,
-                   trade_strategy: Optional[str] = None):
+                   trade_strategy: Optional[str] = None,
+                   lstm_signal_context: Optional[Dict[str, Any]] = None):
         """Execute the graph and write the resulting state to disk and memory log."""
         source_snapshot = self.build_source_snapshot(
             company_name, trade_date, asset_type=asset_type
         )
 
         # Initialize state — inject memory log context for PM.
-        past_context = self.memory_log.get_past_context(company_name)
+        # Current LSTM-context runs must be decided from current evidence only.
+        # Preserve legacy memory behavior for standalone TradingAgents callers.
+        past_context = (
+            "" if lstm_signal_context else self.memory_log.get_past_context(company_name)
+        )
         init_agent_state = self.propagator.create_initial_state(
             company_name, trade_date, asset_type=asset_type, past_context=past_context,
             trade_horizon_days=trade_horizon_days,
@@ -467,6 +474,7 @@ class TradingAgentsGraph:
             profit_target_pct=profit_target_pct,
             stop_loss_pct=stop_loss_pct,
             trade_strategy=trade_strategy,
+            lstm_signal_context=lstm_signal_context,
             sentiment_source_snapshot=source_snapshot,
         )
         args = self.propagator.get_graph_args()

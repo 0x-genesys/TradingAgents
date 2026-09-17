@@ -9,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    get_analyst_context,
     enforce_exact_tool_ticker,
     get_global_news,
     get_language_instruction,
@@ -53,6 +54,7 @@ def _frozen_ticker_news(snapshot: dict[str, Any]) -> str:
     sections = []
     for name, label in (
         ("company_news", "Yahoo Finance company news"),
+        ("tavily_company_news", "Tavily company-news fallback"),
         ("google_news", "India-localized Google News"),
     ):
         source = _source(snapshot, name)
@@ -71,8 +73,9 @@ def _frozen_ticker_news(snapshot: dict[str, Any]) -> str:
 def _news_report_issues(report: str, snapshot: dict[str, Any]) -> list[str]:
     """Reject claims that contradict usable frozen ticker-news evidence."""
     company_news = _source(snapshot, "company_news")
+    tavily_news = _source(snapshot, "tavily_company_news")
     google_news = _source(snapshot, "google_news")
-    if not (_is_usable(company_news) or _is_usable(google_news)):
+    if not (_is_usable(company_news) or _is_usable(tavily_news) or _is_usable(google_news)):
         return []
 
     issues = []
@@ -86,7 +89,9 @@ def _news_report_issues(report: str, snapshot: dict[str, Any]) -> list[str]:
             lowered = text.lower()
             source_scoped_and_accurate = (
                 "yahoo" in lowered and not _is_usable(company_news)
-            ) or ("google" in lowered and not _is_usable(google_news))
+            ) or ("tavily" in lowered and not _is_usable(tavily_news)) or (
+                "google" in lowered and not _is_usable(google_news)
+            )
             if not source_scoped_and_accurate:
                 issues.append(
                     "The report says ticker-specific news is absent even though the "
@@ -119,10 +124,11 @@ def _stock_system_message(
 
 The ticker-news blocks below are the same frozen snapshot used by the Sentiment
 Analyst. Their status and content are authoritative. Use evidence in OK or STALE
-blocks. NO_DATA, DISABLED, and UNAVAILABLE mean unknown and carry no directional
-weight. Never claim that company-specific news is absent when either block is OK
-or STALE. Distinguish a source-specific gap, such as Yahoo Finance NO_DATA, from
-usable evidence in another source, such as Google News OK.
+blocks. NO_DATA, DISABLED, NOT_NEEDED, and UNAVAILABLE mean unknown and carry no
+directional weight. Never claim that company-specific news is absent when any
+ticker-news block is OK or STALE. Distinguish a source-specific gap, such as
+Yahoo Finance NO_DATA, from usable evidence in another source, such as Tavily
+fallback OK or Google News OK.
 
 Do not search for ticker-specific news again. The only available tool is
 get_global_news, which may add broader macroeconomic evidence that could affect
@@ -174,13 +180,13 @@ def create_news_analyst(llm):
             system_message = _stock_system_message(
                 ticker=state["company_of_interest"],
                 snapshot=snapshot,
-                trade_context_note=state.get("trade_context_note", ""),
+                trade_context_note=get_analyst_context(state),
             )
         else:
             tools = [get_news, get_global_news]
             system_message = _generic_system_message(
                 asset_label,
-                state.get("trade_context_note", ""),
+                get_analyst_context(state),
             )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -224,7 +230,7 @@ def create_news_analyst(llm):
                             (
                                 "Rewrite the news report so every ticker-news claim agrees "
                                 "with the frozen snapshot. Preserve supported macro evidence. "
-                                "Do not say ticker-specific news is absent when either frozen "
+                                "Do not say ticker-specific news is absent when any frozen "
                                 "source is usable. Distinguish source-specific missing data "
                                 "from evidence available through another source.\n\n"
                                 "Frozen ticker news:\n{frozen_news}"
@@ -255,6 +261,9 @@ def create_news_analyst(llm):
         if "FALLBACK_NEWS_DIGEST" not in tags:
             report, output_tags = sanitize_agent_output(report, state)
             tags.extend(output_tags)
+            if asset_type == "stock" and not str(report or "").strip():
+                tags.append("FALLBACK_NEWS_DIGEST")
+                report = _grounded_news_digest(snapshot, fallback=True)
             if asset_type == "stock" and report:
                 report = (
                     _grounded_news_digest(snapshot)

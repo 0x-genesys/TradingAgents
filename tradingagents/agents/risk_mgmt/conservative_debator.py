@@ -23,8 +23,10 @@ def create_conservative_debator(llm):
 
         ctx = state.get("trade_context_note", "")
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nEvaluate risk for THIS specific trade horizon. Is the fixed stop likely to trigger before the fixed target in current volatility? Is there exit liquidity for a short-term trade?" if ctx else ""
+        lstm_ctx = state.get("lstm_context_note", "")
+        lstm_line = f"\n\n---\n{lstm_ctx}" if lstm_ctx else ""
 
-        prompt = f"""{ctx_line}As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. A bearish objection must be anchored in verified ticker-specific downside evidence that can matter inside this trade window. Missing confirmation alone or broad macro caution are not enough to justify a SELL stance. Here is the trader's decision:
+        prompt = f"""{ctx_line}{lstm_line}As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. When LSTM evidence is supplied, distinguish expected pullback weakness from structural invalidation. A bearish objection must be anchored in verified ticker-specific downside evidence that can matter inside this trade window. Missing confirmation alone or broad macro caution are not enough to justify a SELL stance. Here is the trader's decision:
 
 {trader_decision}
 

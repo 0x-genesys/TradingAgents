@@ -1,0 +1,44 @@
+[
+  {
+    "ticker": "GRSE.NS", "date": "2026-09-03",
+    "source": "2026-09-03/GRSE.NS_20260903_061711/full_state.json",
+    "return_5d": -0.05140096135880412, "macd_histogram": -9.640554330334075,
+    "claim": "The supplied LSTM evidence definitively validates a pullback within established momentum (#1 cross-sectional rank, 0.8441 score), where primary feature attribution (established_momentum and recent_pullback) confirms that current price compression is structural exhaustion rather than trend failure.",
+    "issue": "MODEL_INFLUENCE_NOT_MARKET_PROOF"
+  },
+  {
+    "ticker": "TIINDIA.NS", "date": "2026-09-03",
+    "source": "2026-09-03/TIINDIA.NS_20260903_065222/full_state.json",
+    "return_5d": -0.04895104895104896, "macd_histogram": -9.198818830621752,
+    "claim": "The model confirms a validated trend with exhaustion-led pullback characteristics.",
+    "issue": "MODEL_INFLUENCE_NOT_MARKET_PROOF"
+  },
+  {
+    "ticker": "DLF.NS", "date": "2026-09-10",
+    "source": "2026-09-10/DLF.NS_20260910_061829/full_state.json",
+    "return_5d": -0.027392194404882497, "macd_histogram": -2.6688685507158567,
+    "claim": "DLF.NS ranks #1 out of 190 tickers on a momentum LSTM model (score 0.8163), where the recent_pullback feature (+0.0841) confirms that short-term weakness represents exhaustion rather than structural failure.",
+    "issue": "MODEL_INFLUENCE_NOT_MARKET_PROOF"
+  },
+  {
+    "ticker": "BANKBARODA.NS", "date": "2026-08-26",
+    "source": "2026-08-26/BANKBARODA.NS_20260826_073321/full_state.json",
+    "return_5d": -0.012295081967213073, "macd_histogram": -0.05972565204308422,
+    "claim": "The trade asymmetry (+3.0% / -4.5%) mathematically requires only a ~38% win rate to be profitable, but quant structure pushes effective probability significantly higher.",
+    "issue": "arithmetic"
+  },
+  {
+    "ticker": "NMDC.NS", "date": "2026-09-16",
+    "source": "2026-09-16/NMDC.NS_20260916_124711/full_state.json",
+    "return_5d": -0.04969896269594398, "macd_histogram": -0.5087562354946966,
+    "claim": "The score is explicitly a quantitative prior, not a guaranteed probability, yet its top-cross-sectional rank strongly exceeds the >60.00% hit rate threshold required for this payoff ratio to hold positive expectancy net of costs.",
+    "issue": "RANK_IS_NOT_HIT_PROBABILITY"
+  },
+  {
+    "ticker": "COROMANDEL.NS", "date": "2026-08-26",
+    "source": "2026-08-26/COROMANDEL.NS_20260826_075150/full_state.json",
+    "return_5d": -0.0722838896181821, "macd_histogram": -21.68272067792245,
+    "claim": "The model validates that underlying trend velocity remains intact while short-term price action rests.",
+    "issue": "MODEL_INFLUENCE_NOT_MARKET_PROOF"
+  }
+]

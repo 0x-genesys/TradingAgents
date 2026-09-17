@@ -53,6 +53,14 @@ class TraderAction(str, Enum):
     SELL = "Sell"
 
 
+class LSTMThesisAssessment(str, Enum):
+    """Independent TA assessment of the supplied quantitative setup."""
+
+    SUPPORTED = "SUPPORTED"
+    REJECTED = "REJECTED"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+
+
 # ---------------------------------------------------------------------------
 # Research Manager
 # ---------------------------------------------------------------------------
@@ -136,6 +144,33 @@ class TraderProposal(BaseModel):
         default=None,
         description="Optional sizing guidance, e.g. '5% of portfolio'.",
     )
+    lstm_thesis_assessment: Optional[LSTMThesisAssessment] = Field(
+        default=None,
+        description=(
+            "Required when structured LSTM evidence is supplied. State whether current "
+            "verified evidence supports, rejects, or cannot resolve the model's "
+            "pullback-within-established-momentum thesis."
+        ),
+    )
+    candidate_rank: Optional[int] = Field(
+        default=None,
+        description="Copy the supplied LSTM cross-sectional rank when evidence is present.",
+    )
+    supporting_evidence: list[str] = Field(
+        default_factory=list,
+        description="Verified current evidence supporting the LSTM thesis.",
+    )
+    contradicting_evidence: list[str] = Field(
+        default_factory=list,
+        description="Verified current evidence contradicting the LSTM thesis.",
+    )
+    model_disagreement_reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "Required when the action disagrees with the LSTM upward thesis; otherwise "
+            "briefly state why no disagreement exists."
+        ),
+    )
 
 
 def render_trader_proposal(proposal: TraderProposal) -> str:
@@ -156,6 +191,15 @@ def render_trader_proposal(proposal: TraderProposal) -> str:
         parts.extend(["", f"**Stop Loss**: {proposal.stop_loss}"])
     if proposal.position_sizing:
         parts.extend(["", f"**Position Sizing**: {proposal.position_sizing}"])
+    if proposal.lstm_thesis_assessment is not None:
+        parts.extend([
+            "",
+            f"**LSTM Thesis Assessment**: {proposal.lstm_thesis_assessment.value}",
+            f"**Candidate Rank**: {proposal.candidate_rank if proposal.candidate_rank is not None else 'N/A'}",
+            "**Supporting Evidence**: " + ("; ".join(proposal.supporting_evidence) or "None verified"),
+            "**Contradicting Evidence**: " + ("; ".join(proposal.contradicting_evidence) or "None verified"),
+            f"**Model Disagreement Reason**: {proposal.model_disagreement_reason or 'None'}",
+        ])
     parts.extend([
         "",
         f"FINAL TRANSACTION PROPOSAL: **{proposal.action.value.upper()}**",
@@ -204,6 +248,31 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
+    lstm_thesis_assessment: Optional[LSTMThesisAssessment] = Field(
+        default=None,
+        description=(
+            "Required when structured LSTM evidence is supplied. Independently classify "
+            "the current pullback-reversal thesis as supported, rejected, or unresolved."
+        ),
+    )
+    candidate_rank: Optional[int] = Field(
+        default=None,
+        description="Copy the supplied LSTM cross-sectional rank when evidence is present.",
+    )
+    supporting_evidence: list[str] = Field(
+        default_factory=list,
+        description="Verified current evidence supporting the LSTM thesis.",
+    )
+    contradicting_evidence: list[str] = Field(
+        default_factory=list,
+        description="Verified current evidence contradicting the LSTM thesis.",
+    )
+    model_disagreement_reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "Explain any disagreement between the final rating and the LSTM upward thesis."
+        ),
+    )
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -225,4 +294,13 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
+    if decision.lstm_thesis_assessment is not None:
+        parts.extend([
+            "",
+            f"**LSTM Thesis Assessment**: {decision.lstm_thesis_assessment.value}",
+            f"**Candidate Rank**: {decision.candidate_rank if decision.candidate_rank is not None else 'N/A'}",
+            "**Supporting Evidence**: " + ("; ".join(decision.supporting_evidence) or "None verified"),
+            "**Contradicting Evidence**: " + ("; ".join(decision.contradicting_evidence) or "None verified"),
+            f"**Model Disagreement Reason**: {decision.model_disagreement_reason or 'None'}",
+        ])
     return "\n".join(parts)
