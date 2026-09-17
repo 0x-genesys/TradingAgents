@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from datetime import date
 from unittest.mock import patch
 
 import pytest
@@ -23,7 +25,7 @@ from tradingagents.agents.utils.agent_utils import (
     sanitize_unsupported_source_claims,
 )
 from tradingagents.dataflows.source_snapshot import build_source_snapshot
-from tradingagents.dataflows.brave_news import fetch_brave_company_news
+from tradingagents.dataflows.tavily_news import fetch_tavily_company_news
 from tradingagents.dataflows.stocktwits import _headline_matches_company
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
@@ -38,29 +40,46 @@ def _trends(status: str = "UNAVAILABLE") -> dict:
 
 
 @pytest.mark.unit
-def test_brave_company_news_requires_api_key(monkeypatch) -> None:
-    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+def test_tavily_company_news_requires_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 
-    result = fetch_brave_company_news(
+    result = fetch_tavily_company_news(
         "EXAMPLE.NS",
         as_of_date="2026-01-15",
         company_name="Example Limited",
     )
 
-    assert "BRAVE_SEARCH_API_KEY not set" in result
+    assert "TAVILY_API_KEY not set" in result
 
 
 @pytest.mark.unit
-def test_brave_company_news_does_not_backfill_historical_dates(monkeypatch) -> None:
-    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-key")
+def test_tavily_company_news_does_not_backfill_historical_dates(monkeypatch) -> None:
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
 
-    result = fetch_brave_company_news(
+    result = fetch_tavily_company_news(
         "EXAMPLE.NS",
         as_of_date="2026-01-15",
         company_name="Example Limited",
     )
 
     assert "historical point-in-time fallback is not supported" in result
+
+
+@pytest.mark.integration
+def test_tavily_company_news_live_integration() -> None:
+    if not os.environ.get("TAVILY_API_KEY"):
+        pytest.skip("TAVILY_API_KEY not set")
+
+    result = fetch_tavily_company_news(
+        "INFY.NS",
+        as_of_date=date.today().isoformat(),
+        company_name="Infosys Limited",
+        limit=2,
+    )
+
+    assert "TAVILY_API_KEY not set" not in result
+    assert "historical point-in-time fallback is not supported" not in result
+    assert "Tavily company news" in result or "No Tavily company news found" in result
 
 
 @pytest.mark.unit
@@ -75,9 +94,9 @@ def test_optional_sources_add_tags_without_failing(tmp_path) -> None:
             return_value="## EXAMPLE.NS News\nSupported company headline",
         ),
         patch(
-            "tradingagents.dataflows.source_snapshot.fetch_brave_company_news",
+            "tradingagents.dataflows.source_snapshot.fetch_tavily_company_news",
             return_value="Should not be fetched",
-        ) as brave_news,
+        ) as tavily_news,
         patch(
             "tradingagents.dataflows.source_snapshot.fetch_google_news_headlines",
             return_value="Google News headlines for EXAMPLE.NS",
@@ -103,8 +122,8 @@ def test_optional_sources_add_tags_without_failing(tmp_path) -> None:
 
     assert snapshot["analysis_status"] == "COMPLETE"
     assert snapshot["primary_data_available"] is True
-    assert snapshot["sources"]["brave_company_news"]["status"] == "NOT_NEEDED"
-    assert brave_news.call_count == 0
+    assert snapshot["sources"]["tavily_company_news"]["status"] == "NOT_NEEDED"
+    assert tavily_news.call_count == 0
     assert "MISSING_TELEGRAM" in snapshot["data_quality_tags"]
     assert "MISSING_REDDIT" in snapshot["data_quality_tags"]
     assert "MISSING_GOOGLE_TRENDS" in snapshot["data_quality_tags"]
@@ -153,8 +172,8 @@ def test_no_primary_data_is_failed_edge_case(tmp_path) -> None:
             return_value="Error fetching news for EXAMPLE.NS: offline",
         ),
         patch(
-            "tradingagents.dataflows.source_snapshot.fetch_brave_company_news",
-            return_value="<Brave company news disabled: BRAVE_SEARCH_API_KEY not set>",
+            "tradingagents.dataflows.source_snapshot.fetch_tavily_company_news",
+            return_value="<Tavily company news disabled: TAVILY_API_KEY not set>",
         ),
         patch(
             "tradingagents.dataflows.source_snapshot.fetch_google_news_headlines",
@@ -185,7 +204,7 @@ def test_no_primary_data_is_failed_edge_case(tmp_path) -> None:
 
 
 @pytest.mark.unit
-def test_brave_company_news_fallback_replaces_missing_yahoo_company_news(tmp_path) -> None:
+def test_tavily_company_news_fallback_replaces_missing_yahoo_company_news(tmp_path) -> None:
     with (
         patch(
             "tradingagents.dataflows.source_snapshot._yfinance_profile",
@@ -196,8 +215,8 @@ def test_brave_company_news_fallback_replaces_missing_yahoo_company_news(tmp_pat
             return_value="No news found for EXAMPLE.NS",
         ),
         patch(
-            "tradingagents.dataflows.source_snapshot.fetch_brave_company_news",
-            return_value="Brave company news fallback for EXAMPLE.NS\n- Example wins order",
+            "tradingagents.dataflows.source_snapshot.fetch_tavily_company_news",
+            return_value="Tavily company news fallback for EXAMPLE.NS\n- Example wins order",
         ),
         patch(
             "tradingagents.dataflows.source_snapshot.fetch_google_news_headlines",
@@ -225,9 +244,9 @@ def test_brave_company_news_fallback_replaces_missing_yahoo_company_news(tmp_pat
     assert snapshot["analysis_status"] == "COMPLETE"
     assert snapshot["primary_data_available"] is True
     assert snapshot["sources"]["company_news"]["status"] == "NO_DATA"
-    assert snapshot["sources"]["brave_company_news"]["status"] == "OK"
+    assert snapshot["sources"]["tavily_company_news"]["status"] == "OK"
     assert "MISSING_COMPANY_NEWS" not in snapshot["data_quality_tags"]
-    assert "MISSING_BRAVE_COMPANY_NEWS" not in snapshot["data_quality_tags"]
+    assert "MISSING_TAVILY_COMPANY_NEWS" not in snapshot["data_quality_tags"]
 
 
 @pytest.mark.unit
@@ -345,9 +364,9 @@ def test_unavailable_reddit_and_telegram_are_hidden_from_sentiment_prompt_and_fa
     snapshot = {
         "sources": {
             "company_news": {"status": "NO_DATA", "content": "<no Yahoo news>"},
-            "brave_company_news": {
+            "tavily_company_news": {
                 "status": "OK",
-                "content": "Brave headline: Example wins order",
+                "content": "Tavily headline: Example wins order",
             },
             "google_news": {"status": "OK", "content": "Google headline: Example wins order"},
             "reddit": {"status": "NO_DATA", "content": "<no Reddit posts>"},
@@ -364,7 +383,7 @@ def test_unavailable_reddit_and_telegram_are_hidden_from_sentiment_prompt_and_fa
     )
     fallback, _ = _grounded_fallback_report(snapshot)
 
-    assert "Brave headline: Example wins order" in prompt
+    assert "Tavily headline: Example wins order" in prompt
     assert "Google headline: Example wins order" in prompt
     assert "<no Reddit posts>" not in prompt
     assert "<Telegram disabled>" not in prompt

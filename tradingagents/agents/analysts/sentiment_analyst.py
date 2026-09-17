@@ -171,7 +171,7 @@ def _grounded_fallback_report(snapshot: dict[str, Any]) -> tuple[str, bool]:
     sources = snapshot.get("sources") or {}
     labels = {
         "company_news": "Yahoo Finance company news",
-        "brave_company_news": "Brave company-news fallback",
+        "tavily_company_news": "Tavily company-news fallback",
         "google_news": "India-localized Google News",
         "reddit": "Reddit",
         "telegram": "Telegram",
@@ -222,7 +222,7 @@ def _build_system_message(
     source_sections = []
     labels = {
         "company_news": "Yahoo Finance company news",
-        "brave_company_news": "Brave company-news fallback",
+        "tavily_company_news": "Tavily company-news fallback",
         "google_news": "India-localized Google News",
         "reddit": "Reddit",
         "telegram": "Telegram",

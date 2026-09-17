@@ -54,7 +54,7 @@ def _frozen_ticker_news(snapshot: dict[str, Any]) -> str:
     sections = []
     for name, label in (
         ("company_news", "Yahoo Finance company news"),
-        ("brave_company_news", "Brave company-news fallback"),
+        ("tavily_company_news", "Tavily company-news fallback"),
         ("google_news", "India-localized Google News"),
     ):
         source = _source(snapshot, name)
@@ -73,9 +73,9 @@ def _frozen_ticker_news(snapshot: dict[str, Any]) -> str:
 def _news_report_issues(report: str, snapshot: dict[str, Any]) -> list[str]:
     """Reject claims that contradict usable frozen ticker-news evidence."""
     company_news = _source(snapshot, "company_news")
-    brave_news = _source(snapshot, "brave_company_news")
+    tavily_news = _source(snapshot, "tavily_company_news")
     google_news = _source(snapshot, "google_news")
-    if not (_is_usable(company_news) or _is_usable(brave_news) or _is_usable(google_news)):
+    if not (_is_usable(company_news) or _is_usable(tavily_news) or _is_usable(google_news)):
         return []
 
     issues = []
@@ -89,7 +89,7 @@ def _news_report_issues(report: str, snapshot: dict[str, Any]) -> list[str]:
             lowered = text.lower()
             source_scoped_and_accurate = (
                 "yahoo" in lowered and not _is_usable(company_news)
-            ) or ("brave" in lowered and not _is_usable(brave_news)) or (
+            ) or ("tavily" in lowered and not _is_usable(tavily_news)) or (
                 "google" in lowered and not _is_usable(google_news)
             )
             if not source_scoped_and_accurate:
@@ -127,7 +127,7 @@ Analyst. Their status and content are authoritative. Use evidence in OK or STALE
 blocks. NO_DATA, DISABLED, NOT_NEEDED, and UNAVAILABLE mean unknown and carry no
 directional weight. Never claim that company-specific news is absent when any
 ticker-news block is OK or STALE. Distinguish a source-specific gap, such as
-Yahoo Finance NO_DATA, from usable evidence in another source, such as Brave
+Yahoo Finance NO_DATA, from usable evidence in another source, such as Tavily
 fallback OK or Google News OK.
 
 Do not search for ticker-specific news again. The only available tool is

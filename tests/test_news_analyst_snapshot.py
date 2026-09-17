@@ -134,11 +134,11 @@ def test_tool_call_without_final_news_content_uses_deterministic_digest() -> Non
 
 
 @pytest.mark.unit
-def test_brave_news_is_treated_as_usable_ticker_news() -> None:
+def test_tavily_news_is_treated_as_usable_ticker_news() -> None:
     state = _state(company_status="NO_DATA", google_status="NO_DATA")
-    state["sentiment_source_snapshot"]["sources"]["brave_company_news"] = {
+    state["sentiment_source_snapshot"]["sources"]["tavily_company_news"] = {
         "status": "OK",
-        "content": "Brave headline: Example wins a new order",
+        "content": "Tavily headline: Example wins a new order",
     }
     report = "No company-specific news was found."
 
