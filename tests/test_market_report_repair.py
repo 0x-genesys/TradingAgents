@@ -3,6 +3,9 @@ from __future__ import annotations
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableLambda
+from unittest.mock import Mock
 
 from tradingagents.agents.analysts.market_analyst import create_market_analyst
 
@@ -50,3 +53,18 @@ def test_september_16_tool_text_is_repaired_or_fails(ticker, draft):
     assert "REPAIRED_MARKET_REPORT" in result["data_quality_tags"]
     with pytest.raises(RuntimeError, match="INVALID_MARKET_REPORT"):
         create_market_analyst(ToolCompatibleFakeChatModel(responses=[draft, draft]))(state)
+
+
+def test_real_tool_call_keeps_graph_tool_routing():
+    from tradingagents.graph.conditional_logic import ConditionalLogic
+
+    llm = Mock()
+    llm.bind_tools.return_value = RunnableLambda(lambda _: AIMessage(content="", tool_calls=[
+        {"name": "get_stock_data", "args": {"symbol": "NMDC.NS"}, "id": "ohlc"}
+    ]))
+    state = {"company_of_interest": "NMDC.NS", "trade_date": "2026-09-16",
+             "messages": [HumanMessage(content="NMDC.NS")]}
+    result = create_market_analyst(llm)(state)
+    assert result["market_report"] == ""
+    assert ConditionalLogic().should_continue_market(result) == "tools_market"
+    llm.invoke.assert_not_called()

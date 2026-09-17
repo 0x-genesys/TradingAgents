@@ -38,6 +38,26 @@ def get_language_instruction() -> str:
     return f" Write your entire response in {lang}."
 
 
+def get_analyst_context(state: dict) -> str:
+    """Project neutral dated facts and execution parameters, never model persuasion."""
+    context = state.get("lstm_signal_context")
+    if not context:
+        return state.get("trade_context_note", "")
+    from tradingagents.agents.utils.lstm_context import render_technical_snapshot
+
+    signal = context["signal"]
+    contract = context["strategy_contract"]
+    return (
+        f"Trade evaluation | {contract['maximum_horizon_exchange_sessions']} exchange sessions | "
+        f"Entry: {signal['entry_price']:.2f} | "
+        f"Target: {contract['decision_target_pct']:+.2%} | "
+        f"Stop: {contract['stop_loss_pct']:+.2%}. "
+        "Assess target before stop from observed evidence. Establish trend and reversal "
+        "independently; distinguish an observed reversal from future confirmation.\n"
+        + render_technical_snapshot(context)
+    )
+
+
 def build_instrument_context(
     ticker: str,
     asset_type: str = "stock",
@@ -248,7 +268,11 @@ def get_data_quality_instruction(state: dict) -> str:
             "\n\nLSTM EVIDENCE POLICY: The structured context contains factual current-run "
             "model evidence. Give it meaningful weight but make an independent decision. "
             "Do not invent prior runs, historical outcomes, probabilities, features, or "
-            "selection reasons that are absent from the supplied context. Short-term "
+            "selection reasons that are absent from the supplied context. State evidence "
+            "with its metric, value and date. A negative indicator level alone does not "
+            "establish acceleration; volume alone does not prove order-book depth, "
+            "institutional flows or absorption. Distinguish observed reversal from "
+            "future confirmation and mark uncalibrated probability judgments as subjective. Short-term "
             "weakness may be the expected pullback, so test whether established momentum "
             "has structurally failed before treating that weakness as contradictory."
             + payoff_line
@@ -337,12 +361,18 @@ def find_trade_arithmetic_issues(text: str, state: dict) -> list[str]:
         r"\b(?:break[ -]?even|breakeven|positive expectancy|profitable)\b",
         flags=re.IGNORECASE,
     )
-    pct_pattern = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+    # Match a claimed win rate, not the target/stop/cost percentages nearby.
+    rate_patterns = [
+        re.compile(r"(\d+(?:\.\d+)?)\s*%\s*(?:target[- ]hits?|wins?|win[- ]rate|hit[- ]rate)", re.I),
+        re.compile(r"(?:break[ -]?even(?: rate)?|breakeven|win[- ]rate|hit[- ]rate)\s*(?:is|of|at|:|=|requires?)\s*(?:only |about |roughly |approximately |a |~)*(\d+(?:\.\d+)?)\s*%", re.I),
+    ]
     for segment in re.split(r"(?<=[.!?])\s+|\n{2,}", text):
         claim = segment.strip()
         if not claim or not break_even_pattern.search(claim):
             continue
-        percentages = [float(match.group(1)) for match in pct_pattern.finditer(claim)]
+        if re.search(r"\b(?:cannot|can't|does not|not enough|insufficient|not profitable)\b", claim, re.I):
+            continue
+        percentages = [float(match.group(1)) for pattern in rate_patterns for match in pattern.finditer(claim)]
         if any(value < required_pct - 0.5 for value in percentages):
             if claim not in seen:
                 seen.add(claim)

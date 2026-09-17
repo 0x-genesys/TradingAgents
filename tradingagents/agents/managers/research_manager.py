@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from tradingagents.agents.schemas import ResearchPlan, render_research_plan
+from tradingagents.agents.utils.grounding import repair_decision_grounding
 from tradingagents.agents.utils.agent_utils import (
     apply_research_manager_policy,
     build_instrument_context,
@@ -60,6 +61,10 @@ Use Hold as the default outcome when neither side proves a short-term edge. A be
             render_research_plan,
             "Research Manager",
         )
+        investment_plan, grounding_tags = repair_decision_grounding(
+            investment_plan, state, prompt, structured_llm, llm,
+            render_research_plan, "Research Manager",
+        )
         investment_plan, output_tags = sanitize_agent_output(
             investment_plan, state
         )
@@ -68,6 +73,7 @@ Use Hold as the default outcome when neither side proves a short-term edge. A be
         )
         tags = list(state.get("data_quality_tags") or [])
         tags.extend(output_tags)
+        tags.extend(grounding_tags)
         tags.extend(policy_tags)
 
         new_investment_debate_state = {

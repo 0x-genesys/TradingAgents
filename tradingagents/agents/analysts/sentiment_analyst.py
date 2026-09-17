@@ -10,6 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    get_analyst_context,
     find_unsupported_optional_source_claims,
     get_language_instruction,
     sanitize_agent_output,
@@ -93,7 +94,7 @@ def create_sentiment_analyst(llm):
             start_date=start_date,
             end_date=end_date,
             snapshot=snapshot,
-            trade_context_note=state.get("trade_context_note", ""),
+            trade_context_note=get_analyst_context(state),
         )
         prompt = ChatPromptTemplate.from_messages(
             [

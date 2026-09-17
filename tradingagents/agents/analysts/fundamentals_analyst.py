@@ -1,6 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    get_analyst_context,
     enforce_exact_tool_ticker,
     get_balance_sheet,
     get_cashflow,
@@ -30,7 +31,7 @@ def create_fundamentals_analyst(llm):
             get_income_statement,
         ]
 
-        ctx = state.get("trade_context_note", "")
+        ctx = get_analyst_context(state)
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame ALL analysis for THIS specific trade horizon and fixed target/stop objective. For short-term trades, skip valuation multiples (P/E, EV/EBITDA). Prioritize the latest earnings, revenue/profit/margin trend, debt, cash, liquidity, guidance, and dated corporate events that can matter inside the horizon." if ctx else ""
 
         system_message = (

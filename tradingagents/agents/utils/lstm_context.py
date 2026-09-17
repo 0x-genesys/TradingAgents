@@ -125,6 +125,7 @@ def validate_lstm_signal_context(
         raise ValueError("LSTM score, rank, or threshold is invalid") from exc
     if not math.isfinite(score) or not 0 <= score <= 1 or rank < 1:
         raise ValueError("LSTM score or rank is outside its valid range")
+    fixed_trade_facts(context)
 
     run_day = date.fromisoformat(str(trade_date))
     data_day = date.fromisoformat(str(signal["data_timestamp"])[:10])
@@ -194,6 +195,8 @@ def validate_lstm_signal_context(
         for key in _REQUIRED_TECHNICAL_METRICS
     ):
         raise ValueError("LSTM technical snapshot contains non-finite metrics")
+    if technical_values["atr14"] <= 0:
+        raise ValueError("LSTM ATR14 must be positive")
     freshness = technical.get("freshness") or {}
     if freshness.get("inference_date") != str(trade_date):
         raise ValueError("LSTM technical snapshot freshness date does not match")
@@ -248,6 +251,55 @@ def _sensitivity_lines(signal: dict[str, Any]) -> list[str]:
     return lines
 
 
+def fixed_trade_facts(context: dict[str, Any]) -> dict[str, float]:
+    """Compute fixed levels centrally so agents do not reconstruct the arithmetic."""
+    try:
+        entry = float(context["signal"]["entry_price"])
+        contract = context["strategy_contract"]
+        target = float(contract["decision_target_pct"])
+        stop = float(contract["stop_loss_pct"])
+        horizon = contract["maximum_horizon_exchange_sessions"]
+        atr = float(context["signal"]["technical_snapshot"]["values"]["atr14"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Missing or invalid fixed trade parameters/ATR") from exc
+    if (not all(math.isfinite(x) for x in (entry, target, stop, atr))
+            or entry <= 0 or target <= 0 or not -1 < stop < 0 or atr <= 0
+            or isinstance(horizon, bool) or not isinstance(horizon, int) or horizon <= 0):
+        raise ValueError("Invalid fixed trade parameters/ATR")
+    return {
+        "entry_price": entry,
+        "target_price": entry * (1 + target),
+        "stop_price": entry * (1 + stop),
+        "target_distance_atr": entry * target / atr,
+        "stop_distance_atr": entry * -stop / atr,
+        "break_even_pct_before_costs": -stop / (target - stop) * 100,
+    }
+
+
+def render_fixed_trade_facts(context: dict[str, Any]) -> str:
+    facts = fixed_trade_facts(context)
+    return (
+        f"Fixed target price: {facts['target_price']:.4f}; "
+        f"fixed stop price: {facts['stop_price']:.4f}; "
+        f"target distance: {facts['target_distance_atr']:.4f} ATR; "
+        f"stop distance: {facts['stop_distance_atr']:.4f} ATR. "
+        "ATR is a range measure, not a standard deviation or a win probability."
+    )
+
+
+def render_technical_snapshot(context: dict[str, Any]) -> str:
+    """Market facts only, suitable for independent analysts and synthesis."""
+    snapshot = context["signal"]["technical_snapshot"]
+    return (
+        f"CANONICAL MARKET FACTS as of {snapshot['data_timestamp']}:\n"
+        + render_fixed_trade_facts(context) + "\n"
+        + "\n".join(f"- {key}: {_number(value, 6)}" for key, value in snapshot["values"].items())
+        + "\nReturns and ATR percentage are fractions; price/MA fields are ratios. "
+        "Report material conflicts with newer tool data with the metric, both values, "
+        "dates and source. Do not silently replace these facts."
+    )
+
+
 def render_lstm_compact_context(context: dict[str, Any]) -> str:
     """Render model evidence suitable for non-market TA roles."""
     if not context:
@@ -255,6 +307,8 @@ def render_lstm_compact_context(context: dict[str, Any]) -> str:
     signal = context["signal"]
     model = context.get("model") or {}
     contract = context.get("strategy_contract") or {}
+    training = model.get("training_objective") or {}
+    levels = fixed_trade_facts(context)
     universe = context.get("universe") or {}
     route = context.get("orchestrator_selection_route") or signal.get("selection_reason")
     groups = signal.get("feature_group_influence") or {}
@@ -291,16 +345,20 @@ def render_lstm_compact_context(context: dict[str, Any]) -> str:
         f"- Cross-sectional rank: #{signal.get('rank')} of {universe.get('scored_count', 'N/A')} scored tickers",
         f"- Threshold: {_number(signal.get('threshold'), 3)}; selection route: {route}",
         f"- Model: {model.get('family', 'momentum LSTM')}; input window: {model.get('sequence_length', 'N/A')} exchange sessions",
+        f"- Recorded training label: {model.get('training_label', 'not recorded')}",
+        f"- Recorded training objective: {training.get('definition', 'not recorded')}; target {_pct(training.get('profit_target_pct'))}; stop {_pct(training.get('stop_loss_pct'))}; horizon {training.get('horizon_exchange_sessions', 'not recorded')} exchange sessions; metadata complete: {training.get('metadata_complete', False)}",
+        "- The recorded training label and the paper target-before-stop outcome are distinct definitions. A positive realized-return label after stop simulation does not directly label touching the target first. Neither the score nor cross-sectional rank is a calibrated target-hit probability.",
         f"- Data timestamp: {signal.get('data_timestamp')}; entry: {_number(signal.get('entry_price'), 2)}",
         f"- Decision target: {_pct(contract.get('decision_target_pct'))}; stop: {_pct(contract.get('stop_loss_pct'))}; maximum hold: {contract.get('maximum_horizon_exchange_sessions', 'N/A')} exchange sessions",
         f"- Objective: {contract.get('objective', 'N/A')}",
         f"- Current deterministic facts: {feature_summary}",
+        render_technical_snapshot(context),
         f"- Feature-group score influence: {group_text or 'N/A'}",
         *_sensitivity_lines(signal),
         "- Sensitivity and feature-group names describe influence on the model score, not causal proof, trend strength, absorption, institutional buying, or target-hit probability.",
         "- Treat the LSTM as a quantitative prior, not as a prescribed action. Decide BUY/HOLD/SELL independently using verified current evidence.",
         "- Short-term weakness may be part of this pullback setup. Test whether established momentum has structurally failed before treating weak recent returns, EMA10, RSI, or MACD as decisive bearish evidence.",
-        "- Payoff arithmetic: a +3.00% target versus -4.50% stop needs more than a 60.00% target-hit rate before costs to have positive expectancy.",
+        f"- Payoff arithmetic for target/stop-only exits: needs more than {levels['break_even_pct_before_costs']:.2f}% target hits before costs for positive expectancy. Costs increase the required rate; horizon exits have their own returns. A closer target does not by itself establish an edge.",
     ]
     return "\n".join(lines)
 

@@ -9,6 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    get_analyst_context,
     enforce_exact_tool_ticker,
     get_global_news,
     get_language_instruction,
@@ -175,13 +176,13 @@ def create_news_analyst(llm):
             system_message = _stock_system_message(
                 ticker=state["company_of_interest"],
                 snapshot=snapshot,
-                trade_context_note=state.get("trade_context_note", ""),
+                trade_context_note=get_analyst_context(state),
             )
         else:
             tools = [get_news, get_global_news]
             system_message = _generic_system_message(
                 asset_label,
-                state.get("trade_context_note", ""),
+                get_analyst_context(state),
             )
         prompt = ChatPromptTemplate.from_messages(
             [

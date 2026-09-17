@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 import inspect
+import json
+from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from tradingagents.agents.analysts import (
     fundamentals_analyst,
@@ -42,6 +48,8 @@ from tradingagents.agents.utils.lstm_context import (
     validate_lstm_signal_context,
 )
 from tradingagents.graph.propagation import Propagator
+from tradingagents.agents.utils.grounding import find_current_evidence_issues
+from tradingagents.agents.utils.lstm_context import fixed_trade_facts
 
 
 def _context() -> dict:
@@ -301,3 +309,185 @@ def test_evidence_first_analysts_do_not_receive_lstm_persuasion(module) -> None:
     assert "lstm_context_note" not in source
     assert "lstm_market_context_note" not in source
     assert "lstm_context_available=False" in source
+
+
+class CapturePrompts(BaseCallbackHandler):
+    def __init__(self):
+        self.prompts = []
+
+    def on_chat_model_start(self, serialized, messages, **kwargs):
+        self.prompts.append("\n".join(str(m.content) for batch in messages for m in batch))
+
+
+class ToolModel(FakeListChatModel):
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def with_structured_output(self, schema, **kwargs):
+        raise NotImplementedError("Free-text fixture")
+
+
+def _decision_state():
+    state = Propagator().create_initial_state("EXAMPLE.NS", "2026-08-19", lstm_signal_context=_context())
+    state.update(investment_plan="Review current evidence.", trader_investment_plan="Review current evidence.")
+    return state
+
+
+@pytest.mark.parametrize("factory", [
+    market_analyst.create_market_analyst, news_analyst.create_news_analyst,
+    sentiment_analyst.create_sentiment_analyst, fundamentals_analyst.create_fundamentals_analyst,
+])
+def test_full_analyst_prompts_exclude_model_framing_and_preserve_tool_history(factory):
+    state = _decision_state()
+    state["messages"] = [HumanMessage(content="EXAMPLE.NS"),
+        AIMessage(content="", tool_calls=[{"name": "get_stock_data", "args": {}, "id": "price"}]),
+        ToolMessage(content="Verified OHLC: close=100, source session 2026-08-19", tool_call_id="price")]
+    capture = CapturePrompts()
+    factory(ToolModel(responses=["Current evidence is mixed; reversal is unconfirmed."], callbacks=[capture]))(state)
+    for prompt in capture.prompts:
+        assert "pullback_within_established_momentum" not in prompt
+        assert "pullback within established momentum" not in prompt
+        assert "0.806" not in prompt
+        assert "score_influence" not in prompt
+        assert "EXACT MODEL INPUT MATRIX" not in prompt
+        assert "Verified OHLC: close=100" in prompt
+        assert "sma200: 85.000000" in prompt
+        assert "2026-08-19" in prompt
+        assert "7 exchange sessions" in prompt
+
+
+@pytest.mark.parametrize("bad", [
+    "The LSTM definitively validates an intact uptrend and proves institutional buying with an 80.6% target-hit probability.",
+    "The five-session return is +5% and MACD histogram is positive.",
+    "The LSTM rank strongly exceeds the >60.00% hit rate threshold.",
+])
+@pytest.mark.parametrize("factory,field,tag", [
+    (portfolio_manager.create_portfolio_manager, "final_trade_decision", "FINAL"),
+    (trader.create_trader, "trader_investment_plan", "TRADER"),
+    (research_manager.create_research_manager, "investment_plan", "RESEARCH_MANAGER"),
+])
+def test_decision_nodes_repair_evidence_once(factory, field, tag, bad):
+    state = _decision_state()
+    capture = CapturePrompts()
+    good = "**Rating**: Buy\n\n**Action**: Buy\n\nFive-session return is -2%. A reversal remains a hypothesis."
+    result = factory(ToolModel(responses=[bad, good], callbacks=[capture]))(state)
+    assert len(capture.prompts) == 2
+    assert result[field] == good
+    assert f"REPAIRED_{tag}_GROUNDING" in result["data_quality_tags"]
+    assert "LSTM QUANTITATIVE EVIDENCE" in capture.prompts[0]
+    assert "0.806" in capture.prompts[0]
+
+
+@pytest.mark.parametrize("action", ["Buy", "Hold", "Sell"])
+def test_unresolved_issue_visible_without_rewriting_action(action):
+    state = _decision_state()
+    bad = f"**Rating**: {action}\n\nThe LSTM proves an intact uptrend."
+    capture = CapturePrompts()
+    result = portfolio_manager.create_portfolio_manager(ToolModel(responses=[bad, bad], callbacks=[capture]))(state)
+    assert len(capture.prompts) == 2
+    assert result["final_trade_decision"].startswith(bad)
+    assert "Unresolved evidence issues" in result["final_trade_decision"]
+    assert "INVALID_FINAL_GROUNDING" in result["data_quality_tags"]
+
+
+@pytest.mark.parametrize("action", ["Buy", "Hold", "Sell"])
+def test_valid_rebound_or_rejection_is_preserved(action):
+    state = _decision_state()
+    valid = f"**Rating**: {action}\n\nThe LSTM does not prove an intact trend. Five-session return is -2%. The model supports a possible rebound, but confirmation remains pending."
+    capture = CapturePrompts()
+    result = portfolio_manager.create_portfolio_manager(ToolModel(responses=[valid], callbacks=[capture]))(state)
+    assert len(capture.prompts) == 1
+    assert result["final_trade_decision"] == valid
+    assert result["data_quality_tags"] == []
+
+
+@pytest.mark.parametrize("case", json.loads((Path(__file__).parent / "fixtures/lstm_grounding_cases.json").read_text()), ids=lambda c: c["ticker"])
+def test_saved_cases_flag_reasoning_not_trade_outcomes(case):
+    state = _decision_state()
+    values = state["lstm_signal_context"]["signal"]["technical_snapshot"]["values"]
+    values.update(return_5d=case["return_5d"], macd_histogram=case["macd_histogram"])
+    if case["issue"] == "arithmetic":
+        assert find_trade_arithmetic_issues(case["claim"], state)
+    else:
+        assert any(case["issue"] in i for i in find_current_evidence_issues(case["claim"], state))
+    # A factual correction can retain BUY even for a weak snapshot. No SMA gate.
+    corrected = f"**Rating**: Buy\n\nFive-session return is {case['return_5d'] * 100:.2f}%. MACD histogram is {case['macd_histogram']:.3f}. The rebound is a hypothesis, with future confirmation required."
+    result = portfolio_manager.create_portfolio_manager(ToolModel(responses=[case["claim"], corrected]))(state)
+    assert result["final_trade_decision"] == corrected
+    assert "REPAIRED_FINAL_GROUNDING" in result["data_quality_tags"]
+
+
+@pytest.mark.parametrize("text,bad", [
+    ("A +3% target and -4.5% stop require 60% wins to break even before costs.", False),
+    ("A +3% target and -4.5% stop with 0.2% costs require 62.67% wins to break even.", False),
+    ("The trade can break even with only 38% wins at this payoff.", True),
+    ("The break-even rate is 38%.", True),
+    ("At 38% wins this trade cannot break even.", False),
+    ("A profitable exit books +3% before 0.2% costs.", False),
+])
+def test_payoff_checks_only_claimed_win_rates(text, bad):
+    state = _decision_state()
+    assert bool(find_trade_arithmetic_issues(text, state)) == bad
+    if not bad:
+        capture = CapturePrompts()
+        decision = "**Rating**: Buy\n\n" + text
+        result = portfolio_manager.create_portfolio_manager(ToolModel(responses=[decision], callbacks=[capture]))(state)
+        assert len(capture.prompts) == 1
+        assert result["final_trade_decision"] == decision
+
+
+def test_fixed_levels_training_semantics_and_custom_targets():
+    context = _context()
+    levels = fixed_trade_facts(context)
+    assert levels["target_price"] == 103
+    assert levels["stop_price"] == 95.5
+    assert levels["target_distance_atr"] == 1.5
+    assert levels["stop_distance_atr"] == 2.25
+    compact = render_lstm_compact_context(context)
+    assert context["model"]["training_label"] in compact
+    assert "distinct definitions" in compact
+    assert "target price: 103.0000" in compact
+    assert "stop distance: 2.2500 ATR" in compact
+    assert "as of 2026-08-19" in compact
+    context["strategy_contract"]["decision_target_pct"] = 0.02
+    compact = render_lstm_compact_context(context)
+    assert "target price: 102.0000" in compact
+    assert "69.23% target hits" in compact
+    assert "Recorded training objective" in compact
+
+
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
+def test_invalid_atr_cannot_generate_trade_levels(value):
+    context = _context()
+    context["signal"]["technical_snapshot"]["values"]["atr14"] = value
+    with pytest.raises(ValueError):
+        validate_lstm_signal_context(context, "EXAMPLE.NS", "2026-08-19")
+
+
+def test_structured_pm_gets_bounded_repair_and_retains_action():
+    llm = Mock()
+    llm.with_structured_output.return_value.invoke.side_effect = [
+        PortfolioDecision(rating=PortfolioRating.BUY, executive_summary="Review", investment_thesis="The LSTM proves institutional absorption."),
+        PortfolioDecision(rating=PortfolioRating.BUY, executive_summary="Review", investment_thesis="Institutional flow is unknown; a reversal remains a hypothesis."),
+    ]
+    result = portfolio_manager.create_portfolio_manager(llm)(_decision_state())
+    assert llm.with_structured_output.return_value.invoke.call_count == 2
+    llm.invoke.assert_not_called()
+    assert result["final_trade_decision"].startswith("**Rating**: Buy")
+    assert "REPAIRED_FINAL_GROUNDING" in result["data_quality_tags"]
+
+
+def test_fixed_price_atr_and_ma_conflicts():
+    state = _decision_state()
+    bad = "Target price: $104. Target distance is 2.0 ATR. The target maps directly to MA20/MA50."
+    issues = find_current_evidence_issues(bad, state)
+    assert any("FIXED_LEVEL_CONFLICT" in i for i in issues)
+    assert any("ATR_DISTANCE_CONFLICT" in i for i in issues)
+    assert any("TARGET_MA_CONFLICT" in i for i in issues)
+    assert not find_current_evidence_issues("Target price: $103. Stop price: $95.50. Target distance: 1.50 ATR. Stop distance: 2.25 ATR.", state)
+
+
+def test_metric_names_are_not_values_or_prefixes_of_other_metrics():
+    state = _decision_state()
+    text = "RSI14 is near an extreme. SMA200 provides a long-term reference. Price/MA200 is a ratio. Close/SMA200 1.082x. SMA200 (0.966x) describes proximity."
+    assert not find_current_evidence_issues(text, state)

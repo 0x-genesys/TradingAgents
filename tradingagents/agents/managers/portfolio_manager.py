@@ -11,12 +11,10 @@ back gracefully to free-text generation.
 from __future__ import annotations
 
 from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
+from tradingagents.agents.utils.grounding import repair_decision_grounding
 from tradingagents.agents.utils.agent_utils import (
     apply_portfolio_manager_policy,
     build_instrument_context,
-    find_trade_arithmetic_issues,
-    find_unsupported_optional_source_claims,
-    find_unsupported_upstream_claims,
     get_data_quality_instruction,
     get_language_instruction,
     sanitize_agent_output,
@@ -86,42 +84,13 @@ Be decisive and ground every conclusion in specific evidence from the analysts. 
         )
 
         tags = list(state.get("data_quality_tags") or [])
-        unsupported_claims = (
-            find_unsupported_optional_source_claims(final_trade_decision, state)
-            + find_unsupported_upstream_claims(final_trade_decision, state)
-            + find_trade_arithmetic_issues(final_trade_decision, state)
+        final_trade_decision, grounding_tags = repair_decision_grounding(
+            final_trade_decision, state, prompt, structured_llm, llm,
+            render_pm_decision, "Portfolio Manager",
         )
-        if unsupported_claims:
-            repair_prompt = (
-                prompt
-                + "\n\nYour previous draft used unsupported evidence. Rewrite the complete "
-                "decision once. Preserve valid ticker-specific evidence and the rating only if "
-                "verified evidence supports it. Do not use source absence or an invented upstream "
-                "selector/model signal as evidence, and fix any target/stop arithmetic "
-                "without changing the rating unless the corrected evidence requires it. "
-                "Problematic draft excerpts:\n- "
-                + "\n- ".join(unsupported_claims)
-            )
-            final_trade_decision = invoke_structured_or_freetext(
-                structured_llm,
-                llm,
-                repair_prompt,
-                render_pm_decision,
-                "Portfolio Manager grounding repair",
-            )
-            remaining_claims = (
-                find_unsupported_optional_source_claims(final_trade_decision, state)
-                + find_unsupported_upstream_claims(final_trade_decision, state)
-                + find_trade_arithmetic_issues(final_trade_decision, state)
-            )
-            if remaining_claims:
-                tags.append("INVALID_FINAL_GROUNDING")
-                final_trade_decision, output_tags = sanitize_agent_output(
-                    final_trade_decision, state
-                )
-                tags.extend(output_tags)
-            else:
-                tags.append("REPAIRED_FINAL_GROUNDING")
+        tags.extend(grounding_tags)
+        final_trade_decision, output_tags = sanitize_agent_output(final_trade_decision, state)
+        tags.extend(output_tags)
 
         final_trade_decision, policy_tags = apply_portfolio_manager_policy(
             final_trade_decision, state

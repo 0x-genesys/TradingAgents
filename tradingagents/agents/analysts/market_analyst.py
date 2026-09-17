@@ -5,6 +5,7 @@ from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     enforce_exact_tool_ticker,
     get_indicators,
+    get_analyst_context,
     get_language_instruction,
     get_stock_data,
     sanitize_agent_output,
@@ -39,7 +40,7 @@ def create_market_analyst(llm):
             get_indicators,
         ]
 
-        ctx = state.get("trade_context_note", "")
+        ctx = get_analyst_context(state)
         ctx_line = f"\n\n---\nIMPORTANT CONTEXT — Trade parameters: {ctx}\nFrame ALL analysis for THIS specific trade horizon and fixed entry, target, and stop. Assess whether the target is reachable before the stop. Valuation multiples (P/E, EV/EBITDA) are largely irrelevant for short-term trades." if ctx else ""
 
         system_message = (

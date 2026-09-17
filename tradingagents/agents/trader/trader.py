@@ -7,6 +7,7 @@ import functools
 from langchain_core.messages import AIMessage
 
 from tradingagents.agents.schemas import TraderProposal, render_trader_proposal
+from tradingagents.agents.utils.grounding import repair_decision_grounding
 from tradingagents.agents.utils.agent_utils import (
     apply_trader_policy,
     build_instrument_context,
@@ -75,12 +76,17 @@ def create_trader(llm):
             render_trader_proposal,
             "Trader",
         )
+        trader_plan, grounding_tags = repair_decision_grounding(
+            trader_plan, state, messages, structured_llm, llm,
+            render_trader_proposal, "Trader",
+        )
         trader_plan, output_tags = sanitize_agent_output(
             trader_plan, state
         )
         trader_plan, policy_tags = apply_trader_policy(trader_plan, state)
         tags = list(state.get("data_quality_tags") or [])
         tags.extend(output_tags)
+        tags.extend(grounding_tags)
         tags.extend(policy_tags)
 
         return {
