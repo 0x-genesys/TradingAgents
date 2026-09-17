@@ -7,6 +7,8 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from tradingagents.agents.analysts.sentiment_analyst import (
+    _build_system_message,
+    _grounded_fallback_report,
     _unsupported_claim_issues,
     create_sentiment_analyst,
 )
@@ -21,6 +23,7 @@ from tradingagents.agents.utils.agent_utils import (
     sanitize_unsupported_source_claims,
 )
 from tradingagents.dataflows.source_snapshot import build_source_snapshot
+from tradingagents.dataflows.brave_news import fetch_brave_company_news
 from tradingagents.dataflows.stocktwits import _headline_matches_company
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
@@ -35,6 +38,32 @@ def _trends(status: str = "UNAVAILABLE") -> dict:
 
 
 @pytest.mark.unit
+def test_brave_company_news_requires_api_key(monkeypatch) -> None:
+    monkeypatch.delenv("BRAVE_SEARCH_API_KEY", raising=False)
+
+    result = fetch_brave_company_news(
+        "EXAMPLE.NS",
+        as_of_date="2026-01-15",
+        company_name="Example Limited",
+    )
+
+    assert "BRAVE_SEARCH_API_KEY not set" in result
+
+
+@pytest.mark.unit
+def test_brave_company_news_does_not_backfill_historical_dates(monkeypatch) -> None:
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-key")
+
+    result = fetch_brave_company_news(
+        "EXAMPLE.NS",
+        as_of_date="2026-01-15",
+        company_name="Example Limited",
+    )
+
+    assert "historical point-in-time fallback is not supported" in result
+
+
+@pytest.mark.unit
 def test_optional_sources_add_tags_without_failing(tmp_path) -> None:
     with (
         patch(
@@ -45,6 +74,10 @@ def test_optional_sources_add_tags_without_failing(tmp_path) -> None:
             "tradingagents.dataflows.source_snapshot.get_news_yfinance",
             return_value="## EXAMPLE.NS News\nSupported company headline",
         ),
+        patch(
+            "tradingagents.dataflows.source_snapshot.fetch_brave_company_news",
+            return_value="Should not be fetched",
+        ) as brave_news,
         patch(
             "tradingagents.dataflows.source_snapshot.fetch_google_news_headlines",
             return_value="Google News headlines for EXAMPLE.NS",
@@ -70,6 +103,8 @@ def test_optional_sources_add_tags_without_failing(tmp_path) -> None:
 
     assert snapshot["analysis_status"] == "COMPLETE"
     assert snapshot["primary_data_available"] is True
+    assert snapshot["sources"]["brave_company_news"]["status"] == "NOT_NEEDED"
+    assert brave_news.call_count == 0
     assert "MISSING_TELEGRAM" in snapshot["data_quality_tags"]
     assert "MISSING_REDDIT" in snapshot["data_quality_tags"]
     assert "MISSING_GOOGLE_TRENDS" in snapshot["data_quality_tags"]
@@ -118,6 +153,10 @@ def test_no_primary_data_is_failed_edge_case(tmp_path) -> None:
             return_value="Error fetching news for EXAMPLE.NS: offline",
         ),
         patch(
+            "tradingagents.dataflows.source_snapshot.fetch_brave_company_news",
+            return_value="<Brave company news disabled: BRAVE_SEARCH_API_KEY not set>",
+        ),
+        patch(
             "tradingagents.dataflows.source_snapshot.fetch_google_news_headlines",
             return_value=unavailable,
         ),
@@ -143,6 +182,52 @@ def test_no_primary_data_is_failed_edge_case(tmp_path) -> None:
     assert snapshot["analysis_status"] == "FAILED"
     assert snapshot["primary_data_available"] is False
     assert "MISSING_SENTIMENT" in snapshot["data_quality_tags"]
+
+
+@pytest.mark.unit
+def test_brave_company_news_fallback_replaces_missing_yahoo_company_news(tmp_path) -> None:
+    with (
+        patch(
+            "tradingagents.dataflows.source_snapshot._yfinance_profile",
+            return_value=("Example Limited", {"company_name": "Example Limited"}),
+        ),
+        patch(
+            "tradingagents.dataflows.source_snapshot.get_news_yfinance",
+            return_value="No news found for EXAMPLE.NS",
+        ),
+        patch(
+            "tradingagents.dataflows.source_snapshot.fetch_brave_company_news",
+            return_value="Brave company news fallback for EXAMPLE.NS\n- Example wins order",
+        ),
+        patch(
+            "tradingagents.dataflows.source_snapshot.fetch_google_news_headlines",
+            return_value="<Google News unavailable>",
+        ),
+        patch(
+            "tradingagents.dataflows.source_snapshot.fetch_reddit_posts",
+            return_value="<no Reddit posts found>",
+        ),
+        patch(
+            "tradingagents.dataflows.source_snapshot.fetch_telegram_messages",
+            return_value="<Telegram disabled>",
+        ),
+        patch(
+            "tradingagents.dataflows.source_snapshot.fetch_google_trends_snapshot",
+            return_value=_trends(),
+        ),
+    ):
+        snapshot = build_source_snapshot(
+            "EXAMPLE.NS",
+            "2026-08-03",
+            cache_dir=tmp_path,
+        )
+
+    assert snapshot["analysis_status"] == "COMPLETE"
+    assert snapshot["primary_data_available"] is True
+    assert snapshot["sources"]["company_news"]["status"] == "NO_DATA"
+    assert snapshot["sources"]["brave_company_news"]["status"] == "OK"
+    assert "MISSING_COMPANY_NEWS" not in snapshot["data_quality_tags"]
+    assert "MISSING_BRAVE_COMPANY_NEWS" not in snapshot["data_quality_tags"]
 
 
 @pytest.mark.unit
@@ -250,9 +335,41 @@ def test_optional_source_gaps_are_explicitly_non_directional() -> None:
 
     instruction = get_data_quality_instruction(state)
 
-    assert "Reddit, Telegram" in instruction
-    assert "UNKNOWN, not negative sentiment" in instruction
+    assert "Reddit" not in instruction
+    assert "Telegram" not in instruction
     assert "Google Trends" not in instruction
+
+
+@pytest.mark.unit
+def test_unavailable_reddit_and_telegram_are_hidden_from_sentiment_prompt_and_fallback() -> None:
+    snapshot = {
+        "sources": {
+            "company_news": {"status": "NO_DATA", "content": "<no Yahoo news>"},
+            "brave_company_news": {
+                "status": "OK",
+                "content": "Brave headline: Example wins order",
+            },
+            "google_news": {"status": "OK", "content": "Google headline: Example wins order"},
+            "reddit": {"status": "NO_DATA", "content": "<no Reddit posts>"},
+            "telegram": {"status": "DISABLED", "content": "<Telegram disabled>"},
+            "google_trends": {"status": "UNAVAILABLE", "content": "<no trends>"},
+        }
+    }
+
+    prompt = _build_system_message(
+        ticker="EXAMPLE.NS",
+        start_date="2026-08-01",
+        end_date="2026-08-08",
+        snapshot=snapshot,
+    )
+    fallback, _ = _grounded_fallback_report(snapshot)
+
+    assert "Brave headline: Example wins order" in prompt
+    assert "Google headline: Example wins order" in prompt
+    assert "<no Reddit posts>" not in prompt
+    assert "<Telegram disabled>" not in prompt
+    assert "<no Reddit posts>" not in fallback
+    assert "<Telegram disabled>" not in fallback
 
 
 @pytest.mark.unit

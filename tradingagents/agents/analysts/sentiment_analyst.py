@@ -87,7 +87,6 @@ def create_sentiment_analyst(llm):
             ticker,
             state.get("asset_type", "stock"),
             canonical_name=company_name,
-            lstm_context_available=False,
         )
         system_message = _build_system_message(
             ticker=ticker,
@@ -172,6 +171,7 @@ def _grounded_fallback_report(snapshot: dict[str, Any]) -> tuple[str, bool]:
     sources = snapshot.get("sources") or {}
     labels = {
         "company_news": "Yahoo Finance company news",
+        "brave_company_news": "Brave company-news fallback",
         "google_news": "India-localized Google News",
         "reddit": "Reddit",
         "telegram": "Telegram",
@@ -183,6 +183,8 @@ def _grounded_fallback_report(snapshot: dict[str, Any]) -> tuple[str, bool]:
     for name, label in labels.items():
         source = sources.get(name) or {}
         status = str(source.get("status", "UNAVAILABLE")).upper()
+        if name in {"reddit", "telegram"} and status not in {"OK", "STALE"}:
+            continue
         usable = status in {"OK", "STALE"}
         has_usable_source = has_usable_source or usable
         rows.append(f"| {label} | {status} | {'Evidence retained' if usable else 'Unknown'} |")
@@ -220,6 +222,7 @@ def _build_system_message(
     source_sections = []
     labels = {
         "company_news": "Yahoo Finance company news",
+        "brave_company_news": "Brave company-news fallback",
         "google_news": "India-localized Google News",
         "reddit": "Reddit",
         "telegram": "Telegram",
@@ -227,10 +230,26 @@ def _build_system_message(
     }
     for key, label in labels.items():
         item = sources.get(key) or {"status": "UNAVAILABLE", "content": "<missing>"}
+        status = str(item.get("status", "UNAVAILABLE")).upper()
+        if key in {"reddit", "telegram"} and status not in {"OK", "STALE"}:
+            continue
         source_sections.append(
-            f"### {label}\nStatus: {item.get('status', 'UNAVAILABLE')}\n"
+            f"### {label}\nStatus: {status}\n"
             f"<start_of_{key}>\n{item.get('content', '<missing>')}\n<end_of_{key}>"
         )
+    hidden_optional = []
+    for key, label in (("reddit", "Reddit"), ("telegram", "Telegram")):
+        item = sources.get(key) or {}
+        status = str(item.get("status", "UNAVAILABLE")).upper()
+        if status not in {"OK", "STALE"}:
+            hidden_optional.append(f"{label}: {status}")
+    optional_note = (
+        "\nUnavailable optional social sources hidden from evidence blocks: "
+        + ", ".join(hidden_optional)
+        + ". Treat them as unknown with zero directional weight.\n"
+        if hidden_optional
+        else ""
+    )
     context = f"\nTrade parameters: {trade_context_note}\nEvaluate sentiment only for its likelihood of helping the target be reached before the stop within the stated horizon.\n" if trade_context_note else ""
     return f"""Analyze sentiment for {ticker} from {start_date} through {end_date}.{context}
 
@@ -239,6 +258,7 @@ NO_DATA, DISABLED, or UNAVAILABLE, state that limitation and assign no direction
 weight. Do not claim a score, count, post, or message that is not in the block.
 Healthy Yahoo Finance company news or India-localized Google News is enough to
 produce a useful report. Do not require Telegram, Reddit, or Google Trends.
+{optional_note}
 
 {chr(10).join(source_sections)}
 

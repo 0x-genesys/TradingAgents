@@ -236,11 +236,13 @@ def get_unavailable_optional_sources(state: dict) -> list[str]:
 
 
 def get_unavailable_sources(state: dict) -> list[str]:
-    """Return every source whose snapshot has no usable evidence."""
+    """Return non-optional sources whose snapshot has no usable evidence."""
     snapshot = state.get("sentiment_source_snapshot") or {}
     sources = snapshot.get("sources") or {}
     unavailable = []
     for key, label in _SOURCE_LABELS.items():
+        if key in {"reddit", "telegram"}:
+            continue
         item = sources.get(key)
         if item and str(item.get("status", "")).upper() not in _USABLE_SOURCE_STATUSES:
             unavailable.append(label)
@@ -437,7 +439,9 @@ def _remove_safe_source_gap_treatment_phrases(text: str) -> str:
 
 def find_unsupported_optional_source_claims(text: str, state: dict) -> list[str]:
     """Find claims that turn an unavailable source into directional evidence."""
-    unavailable = get_unavailable_sources(state)
+    unavailable = sorted(
+        set(get_unavailable_sources(state) + get_unavailable_optional_sources(state))
+    )
     if not text or not unavailable:
         return []
 

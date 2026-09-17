@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from tradingagents.dataflows.brave_news import fetch_brave_company_news
 from tradingagents.dataflows.google_trends import fetch_google_trends_snapshot
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_google_news_headlines
@@ -126,12 +127,29 @@ def build_source_snapshot(
 
     end = datetime.strptime(trade_date, "%Y-%m-%d")
     start_date = (end - timedelta(days=7)).strftime("%Y-%m-%d")
+    company_news = _record(
+        "company_news",
+        lambda: get_news_yfinance(ticker, start_date, trade_date),
+    )
+    brave_company_news = {
+        "source": "brave_company_news",
+        "status": "NOT_NEEDED",
+        "content": "<Brave fallback not used because Yahoo company news is usable>",
+    }
+    if company_news.get("status") != "OK":
+        brave_company_news = _record(
+            "brave_company_news",
+            lambda: fetch_brave_company_news(
+                ticker,
+                as_of_date=trade_date,
+                company_name=company_name,
+            ),
+        )
+
     sources: dict[str, dict[str, Any]] = {
         "yfinance_profile": profile_record,
-        "company_news": _record(
-            "company_news",
-            lambda: get_news_yfinance(ticker, start_date, trade_date),
-        ),
+        "company_news": company_news,
+        "brave_company_news": brave_company_news,
         "google_news": _record(
             "google_news",
             lambda: fetch_google_news_headlines(
@@ -166,6 +184,7 @@ def build_source_snapshot(
     tags: list[str] = []
     tag_by_source = {
         "company_news": "MISSING_COMPANY_NEWS",
+        "brave_company_news": "MISSING_BRAVE_COMPANY_NEWS",
         "google_news": "MISSING_GOOGLE_NEWS",
         "reddit": "MISSING_REDDIT",
         "telegram": "MISSING_TELEGRAM",
@@ -173,21 +192,32 @@ def build_source_snapshot(
     }
     for source, tag in tag_by_source.items():
         status = sources[source].get("status")
+        if source == "brave_company_news" and status == "NOT_NEEDED":
+            continue
         if status == "STALE":
             tags.append(f"STALE_{source.upper()}")
         elif status != "OK":
             tags.append(tag)
+    if sources["company_news"].get("status") == "OK" or sources["brave_company_news"].get("status") == "OK":
+        tags = [tag for tag in tags if tag != "MISSING_COMPANY_NEWS"]
 
     sentiment_available = any(
         sources[name].get("status") in {"OK", "STALE"}
-        for name in ("company_news", "google_news", "reddit", "telegram", "google_trends")
+        for name in (
+            "company_news",
+            "brave_company_news",
+            "google_news",
+            "reddit",
+            "telegram",
+            "google_trends",
+        )
     )
     if not sentiment_available:
         tags.append("MISSING_SENTIMENT")
 
     primary_available = any(
         sources[name].get("status") == "OK"
-        for name in ("yfinance_profile", "company_news", "google_news")
+        for name in ("yfinance_profile", "company_news", "brave_company_news", "google_news")
     )
     payload = {
         "schema_version": 1,

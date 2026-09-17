@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import Field
 
 from tradingagents.agents.analysts.news_analyst import (
@@ -18,6 +18,22 @@ class ToolRecordingFakeChatModel(FakeListChatModel):
         del kwargs
         self.bound_tool_names = [tool.name for tool in tools]
         return self
+
+
+class ToolCallOnlyFakeChatModel(ToolRecordingFakeChatModel):
+    def invoke(self, input, config=None, **kwargs):  # noqa: ANN001
+        del input, config, kwargs
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "get_global_news",
+                    "args": {"curr_date": "2026-08-03"},
+                    "id": "call-news-1",
+                    "type": "tool_call",
+                }
+            ],
+        )
 
 
 def _state(*, company_status: str = "NO_DATA", google_status: str = "OK") -> dict:
@@ -104,3 +120,28 @@ def test_second_news_grounding_failure_uses_deterministic_digest() -> None:
     assert "failed ticker-news grounding validation twice" in result["news_report"]
     assert "INVALID_NEWS_REPORT" in result["data_quality_tags"]
     assert "FALLBACK_NEWS_DIGEST" in result["data_quality_tags"]
+
+
+@pytest.mark.unit
+def test_tool_call_without_final_news_content_uses_deterministic_digest() -> None:
+    llm = ToolCallOnlyFakeChatModel(responses=[])
+    result = create_news_analyst(llm)(_state())
+
+    assert "Google headline: Example wins regulatory approval" in result["news_report"]
+    assert "failed ticker-news grounding validation twice" in result["news_report"]
+    assert "FALLBACK_NEWS_DIGEST" in result["data_quality_tags"]
+    assert "MISSING_NEWS_REPORT" not in result["data_quality_tags"]
+
+
+@pytest.mark.unit
+def test_brave_news_is_treated_as_usable_ticker_news() -> None:
+    state = _state(company_status="NO_DATA", google_status="NO_DATA")
+    state["sentiment_source_snapshot"]["sources"]["brave_company_news"] = {
+        "status": "OK",
+        "content": "Brave headline: Example wins a new order",
+    }
+    report = "No company-specific news was found."
+
+    issues = _news_report_issues(report, state["sentiment_source_snapshot"])
+
+    assert issues
