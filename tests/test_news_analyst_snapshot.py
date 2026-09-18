@@ -134,6 +134,20 @@ def test_tool_call_without_final_news_content_uses_deterministic_digest() -> Non
 
 
 @pytest.mark.unit
+def test_existing_fallback_tag_does_not_leave_empty_news_report() -> None:
+    llm = ToolCallOnlyFakeChatModel(responses=[])
+    state = _state()
+    state["data_quality_tags"].append("FALLBACK_NEWS_DIGEST")
+
+    result = create_news_analyst(llm)(state)
+
+    assert "Google headline: Example wins regulatory approval" in result["news_report"]
+    assert "failed ticker-news grounding validation twice" in result["news_report"]
+    assert "FALLBACK_NEWS_DIGEST" in result["data_quality_tags"]
+    assert result["news_report"].strip()
+
+
+@pytest.mark.unit
 def test_tavily_news_is_treated_as_usable_ticker_news() -> None:
     state = _state(company_status="NO_DATA", google_status="NO_DATA")
     state["sentiment_source_snapshot"]["sources"]["tavily_company_news"] = {

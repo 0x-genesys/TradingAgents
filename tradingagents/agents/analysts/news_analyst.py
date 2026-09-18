@@ -261,15 +261,20 @@ def create_news_analyst(llm):
         if "FALLBACK_NEWS_DIGEST" not in tags:
             report, output_tags = sanitize_agent_output(report, state)
             tags.extend(output_tags)
-            if asset_type == "stock" and not str(report or "").strip():
-                tags.append("FALLBACK_NEWS_DIGEST")
+        if asset_type == "stock":
+            if not str(report or "").strip():
+                if "FALLBACK_NEWS_DIGEST" not in tags:
+                    tags.append("FALLBACK_NEWS_DIGEST")
                 report = _grounded_news_digest(snapshot, fallback=True)
-            if asset_type == "stock" and report:
+            elif "## Frozen ticker-news evidence" not in report:
                 report = (
                     _grounded_news_digest(snapshot)
                     + "\n\n## News Analyst interpretation\n\n"
                     + report
                 )
+        elif not str(report or "").strip() and "FALLBACK_NEWS_DIGEST" not in tags:
+            tags.append("FALLBACK_NEWS_DIGEST")
+            report = _grounded_news_digest(snapshot, fallback=True)
 
         return {
             "messages": [result],
