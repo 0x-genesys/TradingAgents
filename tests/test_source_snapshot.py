@@ -27,7 +27,10 @@ from tradingagents.agents.utils.agent_utils import (
 from tradingagents.dataflows.source_snapshot import build_source_snapshot
 from tradingagents.dataflows.tavily_news import fetch_tavily_company_news
 from tradingagents.dataflows.stocktwits import _headline_matches_company
-from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.graph.trading_graph import (
+    TradingAgentsGraph,
+    validate_replay_source_snapshot,
+)
 
 
 def _trends(status: str = "UNAVAILABLE") -> dict:
@@ -283,6 +286,76 @@ def test_snapshot_is_reused_across_model_runs(tmp_path) -> None:
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert profile.call_count == 1
+
+
+def _replay_snapshot(ticker: str = "EXAMPLE.NS", trade_date: str = "2026-09-18") -> dict:
+    return {
+        "ticker": ticker,
+        "trade_date": trade_date,
+        "primary_data_available": True,
+        "sources": {
+            "company_news": {
+                "status": "OK",
+                "content": "Frozen company news snapshot",
+            }
+        },
+        "data_quality_tags": [],
+    }
+
+
+@pytest.mark.unit
+def test_injected_replay_snapshot_bypasses_live_source_builder(monkeypatch) -> None:
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    snapshot = _replay_snapshot()
+
+    def fail_live_builder(*args, **kwargs):
+        raise AssertionError("live source builder should not run for replay snapshots")
+
+    monkeypatch.setattr(graph, "build_source_snapshot", fail_live_builder)
+
+    assert (
+        graph.resolve_source_snapshot(
+            "EXAMPLE.NS",
+            "2026-09-18",
+            sentiment_source_snapshot=snapshot,
+        )
+        is snapshot
+    )
+
+
+@pytest.mark.unit
+def test_normal_run_still_calls_live_source_builder(monkeypatch) -> None:
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    live_snapshot = _replay_snapshot()
+    calls = []
+
+    def live_builder(company_name, trade_date, asset_type="stock"):
+        calls.append((company_name, trade_date, asset_type))
+        return live_snapshot
+
+    monkeypatch.setattr(graph, "build_source_snapshot", live_builder)
+
+    resolved = graph.resolve_source_snapshot("EXAMPLE.NS", "2026-09-18")
+
+    assert resolved is live_snapshot
+    assert calls == [("EXAMPLE.NS", "2026-09-18", "stock")]
+
+
+@pytest.mark.unit
+def test_injected_replay_snapshot_rejects_ticker_and_date_mismatch() -> None:
+    with pytest.raises(ValueError, match="ticker mismatch"):
+        validate_replay_source_snapshot(
+            _replay_snapshot(ticker="OTHER.NS"),
+            "EXAMPLE.NS",
+            "2026-09-18",
+        )
+
+    with pytest.raises(ValueError, match="trade_date mismatch"):
+        validate_replay_source_snapshot(
+            _replay_snapshot(trade_date="2026-09-17"),
+            "EXAMPLE.NS",
+            "2026-09-18",
+        )
 
 
 @pytest.mark.unit

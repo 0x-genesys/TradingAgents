@@ -51,6 +51,41 @@ from .reflection import Reflector
 from .signal_processing import SignalProcessor
 
 
+def validate_replay_source_snapshot(
+    snapshot: Dict[str, Any],
+    company_name: str,
+    trade_date: str,
+) -> Dict[str, Any]:
+    """Validate a frozen replay source snapshot before injecting it."""
+    if not isinstance(snapshot, dict):
+        raise ValueError("Replay source snapshot must be a dictionary")
+
+    expected_date = str(trade_date)
+    snapshot_ticker = str(snapshot.get("ticker") or "").upper()
+    expected_ticker = str(company_name).upper()
+    if snapshot_ticker != expected_ticker:
+        raise ValueError(
+            "Replay source snapshot ticker mismatch: "
+            f"expected {expected_ticker}, got {snapshot.get('ticker')!r}"
+        )
+
+    snapshot_date = str(snapshot.get("trade_date") or "")
+    if snapshot_date != expected_date:
+        raise ValueError(
+            "Replay source snapshot trade_date mismatch: "
+            f"expected {expected_date}, got {snapshot.get('trade_date')!r}"
+        )
+
+    sources = snapshot.get("sources")
+    if not isinstance(sources, dict) or not sources:
+        raise ValueError("Replay source snapshot must include a non-empty sources dictionary")
+
+    if "primary_data_available" not in snapshot:
+        raise ValueError("Replay source snapshot missing primary_data_available")
+
+    return snapshot
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -381,7 +416,8 @@ class TradingAgentsGraph:
                   profit_target_pct: Optional[float] = None,
                   stop_loss_pct: Optional[float] = None,
                   trade_strategy: Optional[str] = None,
-                  lstm_signal_context: Optional[Dict[str, Any]] = None):
+                  lstm_signal_context: Optional[Dict[str, Any]] = None,
+                  sentiment_source_snapshot: Optional[Dict[str, Any]] = None):
         """Run the trading agents graph for a company on a specific date.
 
         ``asset_type`` selects between the stock pipeline (default) and the
@@ -429,6 +465,7 @@ class TradingAgentsGraph:
                 stop_loss_pct=stop_loss_pct,
                 trade_strategy=trade_strategy,
                 lstm_signal_context=lstm_signal_context,
+                sentiment_source_snapshot=sentiment_source_snapshot,
             )
         finally:
             if self._checkpointer_ctx is not None:
@@ -449,16 +486,36 @@ class TradingAgentsGraph:
             )
         return source_snapshot
 
+    def resolve_source_snapshot(
+        self,
+        company_name,
+        trade_date,
+        asset_type: str = "stock",
+        sentiment_source_snapshot: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Use a validated replay snapshot or build the normal live snapshot."""
+        if sentiment_source_snapshot is not None:
+            return validate_replay_source_snapshot(
+                sentiment_source_snapshot,
+                company_name,
+                str(trade_date),
+            )
+        return self.build_source_snapshot(company_name, trade_date, asset_type=asset_type)
+
     def _run_graph(self, company_name, trade_date, asset_type: str = "stock",
                    trade_horizon_days: Optional[int] = None,
                    entry_price: Optional[float] = None,
                    profit_target_pct: Optional[float] = None,
                    stop_loss_pct: Optional[float] = None,
                    trade_strategy: Optional[str] = None,
-                   lstm_signal_context: Optional[Dict[str, Any]] = None):
+                   lstm_signal_context: Optional[Dict[str, Any]] = None,
+                   sentiment_source_snapshot: Optional[Dict[str, Any]] = None):
         """Execute the graph and write the resulting state to disk and memory log."""
-        source_snapshot = self.build_source_snapshot(
-            company_name, trade_date, asset_type=asset_type
+        source_snapshot = self.resolve_source_snapshot(
+            company_name,
+            trade_date,
+            asset_type=asset_type,
+            sentiment_source_snapshot=sentiment_source_snapshot,
         )
 
         # Initialize state — inject memory log context for PM.
