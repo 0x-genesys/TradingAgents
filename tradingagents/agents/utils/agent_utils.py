@@ -1,6 +1,7 @@
 import re
 
 from langchain_core.messages import HumanMessage, RemoveMessage
+from tradingagents.agents.utils.entry_decision import get_entry_decision_instruction
 
 # Import tools from separate utility files
 from tradingagents.agents.utils.core_stock_tools import (
@@ -278,6 +279,7 @@ def get_data_quality_instruction(state: dict) -> str:
             "weakness may be the expected pullback, so test whether established momentum "
             "has structurally failed before treating that weakness as contradictory."
             + payoff_line
+            + get_entry_decision_instruction(state)
         )
     else:
         instructions = (

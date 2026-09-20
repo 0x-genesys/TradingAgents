@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from tradingagents.agents.schemas import ResearchPlan, render_research_plan
 from tradingagents.agents.utils.grounding import repair_decision_grounding
+from tradingagents.agents.utils.entry_decision import ENTRY_RATING_SCALE
 from tradingagents.agents.utils.agent_utils import (
     apply_research_manager_policy,
     build_instrument_context,
@@ -34,12 +35,7 @@ def create_research_manager(llm):
         lstm_ctx = state.get("lstm_context_note", "")
         lstm_line = f"\n\n---\n{lstm_ctx}" if lstm_ctx else ""
 
-        prompt = f"""{ctx_line}{lstm_line}As the Research Manager and debate facilitator, your role is to critically evaluate this round of debate and deliver a clear, actionable investment plan for the trader. When LSTM evidence is supplied, explicitly evaluate whether current evidence supports or rejects its pullback-reversal thesis.
-
-{instrument_context}
-
----
-
+        rating_policy = ENTRY_RATING_SCALE if state.get("lstm_signal_context") else """
 **Rating Scale** (use exactly one):
 - **Buy**: Strong conviction in the bull thesis; recommend taking or growing the position
 - **Overweight**: Constructive view; recommend gradually increasing exposure
@@ -48,6 +44,13 @@ def create_research_manager(llm):
 - **Sell**: Strong conviction in the bear thesis; recommend exiting or avoiding the position
 
 Use Hold as the default outcome when neither side proves a short-term edge. A bearish recommendation needs verified primary ticker-specific downside evidence that can matter within the trade window. A bullish recommendation needs either a verified positive catalyst or clearly aligned momentum. Do not use missing confirmation alone or broad macro caution as enough reason for Sell or Underweight.
+"""
+
+        prompt = f"""{ctx_line}{lstm_line}As the Research Manager and debate facilitator, your role is to critically evaluate this round of debate and deliver a clear, actionable investment plan for the trader. When LSTM evidence is supplied, explicitly evaluate whether current evidence supports or rejects its pullback-reversal thesis.
+
+{instrument_context}
+
+{rating_policy}
 
 ---
 

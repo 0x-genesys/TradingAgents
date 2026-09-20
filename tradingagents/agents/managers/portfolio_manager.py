@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
 from tradingagents.agents.utils.grounding import repair_decision_grounding
+from tradingagents.agents.utils.entry_decision import ENTRY_RATING_SCALE
 from tradingagents.agents.utils.agent_utils import (
     apply_portfolio_manager_policy,
     build_instrument_context,
@@ -51,18 +52,22 @@ def create_portfolio_manager(llm):
         lstm_ctx = state.get("lstm_context_note", "")
         lstm_line = f"\n\n---\n{lstm_ctx}" if lstm_ctx else ""
 
-        prompt = f"""{ctx_line}{lstm_line}As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision. When LSTM evidence is supplied, answer whether the pullback reversal is supported, whether established momentum remains intact, and whether the fixed target can occur before the stop within the horizon. Fill every LSTM thesis field. The final rating remains your independent decision.
-
-{instrument_context}
-
----
-
+        rating_policy = ENTRY_RATING_SCALE if state.get("lstm_signal_context") else """
 **Rating Scale** (use exactly one):
 - **Buy**: Strong conviction to enter or add to position
 - **Overweight**: Favorable outlook, gradually increase exposure
 - **Hold**: Maintain current position, no action needed
 - **Underweight**: Reduce exposure, take partial profits
 - **Sell**: Exit position or avoid entry
+
+Be decisive and ground every conclusion in specific evidence from the analysts. Use Hold as the default when the setup lacks a proven short-term edge. A Buy or Overweight rating needs either a verified positive catalyst or clearly aligned momentum. A Sell or Underweight rating needs verified primary ticker-specific downside evidence that can matter within the stated trade window. Missing confirmation alone or broad macro caution are not enough for a bearish rating.
+"""
+
+        prompt = f"""{ctx_line}{lstm_line}As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision. When LSTM evidence is supplied, answer whether the pullback reversal is supported, whether established momentum remains intact, and whether the fixed target can occur before the stop within the horizon. Fill every LSTM thesis field. The final rating remains your independent decision.
+
+{instrument_context}
+
+{rating_policy}
 
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
@@ -73,7 +78,7 @@ def create_portfolio_manager(llm):
 
 ---
 
-Be decisive and ground every conclusion in specific evidence from the analysts. Use Hold as the default when the setup lacks a proven short-term edge. A Buy or Overweight rating needs either a verified positive catalyst or clearly aligned momentum. A Sell or Underweight rating needs verified primary ticker-specific downside evidence that can matter within the stated trade window. Missing confirmation alone or broad macro caution are not enough for a bearish rating.{get_data_quality_instruction(state)}{get_language_instruction()}"""
+Ground every conclusion in specific evidence from the analysts.{get_data_quality_instruction(state)}{get_language_instruction()}"""
 
         final_trade_decision = invoke_structured_or_freetext(
             structured_llm,

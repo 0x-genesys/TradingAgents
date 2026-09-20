@@ -250,14 +250,38 @@ Every downstream output is also sanitized before the next agent reads it. Any
 remaining bullish or bearish inference based on source absence is replaced and
 tagged `REMOVED_UNSUPPORTED_SOURCE_CLAIM`.
 
-TradingAgents remains independent from upstream candidate generation. It may
-receive only the ticker, entry reference, seven-session horizon, stop, and trade
-strategy. It does not receive or infer an LSTM signal, model score, rank,
-features, selection history, or selection reason. Agent prompts enforce this
-boundary, and any invented upstream-model claim is removed and tagged
-`REMOVED_UNSUPPORTED_UPSTREAM_CLAIM`. Ticker-bearing tool calls are also forced
+TradingAgents keeps its evidence-gathering analysts independent from upstream
+candidate generation. With optional LSTM context, these analysts receive neutral
+dated technical facts and fixed trade parameters, not model scores, ranks, or
+setup persuasion. Downstream researchers, managers, the trader, and risk debaters
+receive the current-run quantitative prior and independently assess the entry.
+Prior runs and outcomes are not supplied. Without LSTM context, standalone
+analysis retains its existing behavior. Invented upstream claims are removed and
+tagged `REMOVED_UNSUPPORTED_UPSTREAM_CLAIM`. Ticker-bearing tool calls are also forced
 to the exact graph instrument. An attempted symbol typo is corrected before the
 tool executes and tagged `CORRECTED_TOOL_TICKER`.
+
+For LSTM candidates, downstream prompts assess a new long entry from a flat
+position: does evidence favor the supplied target before the stop within the
+supplied horizon, even before full trend repair? Under the current strategy these
+are +3%, -4.5%, and seven exchange sessions. Positive news, positive MACD, and
+moving-average reclaims are not universal prerequisites. A proposed confirmation
+at or beyond the target cannot be required for that entry. Conversely, a model
+score, plausible bounce, or lack of invalidation alone does not justify BUY.
+
+`SUPPORTED` means the entry objective is supported (BUY); `REJECTED` means
+verified adverse evidence argues against the long entry (SELL, not a short);
+`INSUFFICIENT_EVIDENCE` means stay flat (HOLD). These meanings guide the LLM;
+code does not rewrite its action. HOLD must not also recommend a starter purchase
+or maintaining an invented position. Sizing belongs to the execution engine.
+The Research Manager, Trader, and Portfolio Manager expose `Evidence Limitation`
+(`NONE`, `MISSING_INPUTS`, `FORECAST_UNCERTAINTY`, or `BOTH`), `Missing Inputs`, and
+`Forecast Uncertainty`. Reasons identify either essential unavailable facts or
+unresolved price-path questions despite available data. Optional source gaps and
+uncalibrated scores are not automatic rejection criteria. Structured responses
+render these fields; free-text fallbacks are instructed to use the same labels.
+Standalone/older responses may omit them. Factual grounding still requests at
+most one repair and records unresolved issues without forcing a decision.
 
 For stocks, the News Analyst and Sentiment Analyst consume the same frozen Yahoo
 Finance and India-localized Google News blocks. The News Analyst does not run a

@@ -25,12 +25,15 @@ from tradingagents.agents.risk_mgmt import (
     neutral_debator,
 )
 from tradingagents.agents.schemas import (
+    EvidenceLimitation,
     LSTMThesisAssessment,
     PortfolioDecision,
     PortfolioRating,
+    ResearchPlan,
     TraderAction,
     TraderProposal,
     render_pm_decision,
+    render_research_plan,
     render_trader_proposal,
 )
 from tradingagents.agents.trader import trader
@@ -308,7 +311,7 @@ def test_evidence_first_analysts_do_not_receive_lstm_persuasion(module) -> None:
     source = inspect.getsource(module)
     assert "lstm_context_note" not in source
     assert "lstm_market_context_note" not in source
-    assert "lstm_context_available=False" in source
+    # Full prompt tests below cover explicit False and the helper's default False.
 
 
 class CapturePrompts(BaseCallbackHandler):
@@ -350,6 +353,7 @@ def test_full_analyst_prompts_exclude_model_framing_and_preserve_tool_history(fa
         assert "0.806" not in prompt
         assert "score_influence" not in prompt
         assert "EXACT MODEL INPUT MATRIX" not in prompt
+        assert "LSTM CANDIDATE ENTRY POLICY" not in prompt
         assert "Verified OHLC: close=100" in prompt
         assert "sma200: 85.000000" in prompt
         assert "2026-08-19" in prompt
@@ -434,6 +438,120 @@ def test_payoff_checks_only_claimed_win_rates(text, bad):
         result = portfolio_manager.create_portfolio_manager(ToolModel(responses=[decision], callbacks=[capture]))(state)
         assert len(capture.prompts) == 1
         assert result["final_trade_decision"] == decision
+
+
+@pytest.mark.parametrize("negation", ["does not", "does not itself", "does not by itself", "does not necessarily", "cannot alone"])
+def test_volume_denials_do_not_trigger_repairs(negation):
+    state = _decision_state()
+    text = f"Elevated volume on the decline {negation} prove absorption or reversal."
+    capture = CapturePrompts()
+    draft = "**Rating**: Hold\n\n" + text
+    result = portfolio_manager.create_portfolio_manager(
+        ToolModel(responses=[draft], callbacks=[capture]),
+    )(state)
+    assert result["final_trade_decision"] == draft
+    assert result["data_quality_tags"] == []
+    assert len(capture.prompts) == 1
+    bad = text + " But volume confirms institutional absorption."
+    assert any("UNVERIFIED_ORDER_FLOW" in i for i in find_current_evidence_issues(bad, state))
+
+
+@pytest.mark.parametrize("text,invalid", [
+    ("Fixed target 520.15 is closer than the stop 482.275 in canonical ATR terms (target 1.1294 ATR away vs stop 1.6941 ATR away).", False),
+    ("Stop 482.275 is farther than target 520.15 (stop 1.6941 ATR vs target 1.1294 ATR).", False),
+    ("Target distance: 1.1294 ATR. Stop distance: 1.6941 ATR.", False),
+    ("Fixed target 520.15 is closer than stop 482.275 (target 1.1294 ATR vs stop 1.1294 ATR).", True),
+    ("Target is 1.1294 ATR but target distance is 2.5000 ATR.", True),
+    ("Target 520.15 is 2.25 ATR and stop 482.275 is 1.50 ATR.", True),
+])
+def test_atr_distances_bind_to_the_correct_level(text, invalid):
+    state = _decision_state()
+    signal = state["lstm_signal_context"]["signal"]
+    signal["entry_price"] = 505.0
+    signal["technical_snapshot"]["values"]["atr14"] = 13.41428702218192
+    issues = find_current_evidence_issues(text, state)
+    assert any("ATR_DISTANCE_CONFLICT" in i for i in issues) is invalid
+    if not invalid:
+        capture = CapturePrompts()
+        draft = "**Rating**: Buy\n\n" + text
+        result = portfolio_manager.create_portfolio_manager(ToolModel(responses=[draft], callbacks=[capture]))(state)
+        assert len(capture.prompts) == 1
+        assert result["final_trade_decision"] == draft
+
+
+@pytest.mark.parametrize("factory", [
+    research_manager.create_research_manager, trader.create_trader,
+    portfolio_manager.create_portfolio_manager, bull_researcher.create_bull_researcher,
+    bear_researcher.create_bear_researcher, aggressive_debator.create_aggressive_debator,
+    conservative_debator.create_conservative_debator, neutral_debator.create_neutral_debator,
+])
+def test_downstream_prompts_use_flat_entry_objective(factory):
+    state = _decision_state()
+    capture = CapturePrompts()
+    factory(ToolModel(responses=["**Rating**: Hold\n**Action**: Hold"], callbacks=[capture]))(state)
+    prompt = capture.prompts[0]
+    assert "+3.00% before -4.50%" in prompt
+    assert "7 exchange sessions, even before a full trend reversal" in prompt
+    assert "prospective long entry from a flat position" in prompt
+    assert "confirmation at or beyond that target cannot be a prerequisite" in prompt
+    assert "FORECAST_UNCERTAINTY" in prompt and "MISSING_INPUTS" in prompt
+    assert "positive catalyst or clearly aligned momentum" not in prompt
+    assert "Maintain current position, no action needed" not in prompt
+
+
+@pytest.mark.parametrize("factory", [
+    research_manager.create_research_manager, trader.create_trader,
+    portfolio_manager.create_portfolio_manager,
+])
+def test_standalone_decision_prompts_keep_existing_policy(factory):
+    state = _decision_state()
+    for key in ("lstm_signal_context", "lstm_context_note", "lstm_market_context_note"):
+        state.pop(key, None)
+    capture = CapturePrompts()
+    factory(ToolModel(responses=["**Rating**: Hold\n**Action**: Hold"], callbacks=[capture]))(state)
+    assert "LSTM CANDIDATE ENTRY POLICY" not in capture.prompts[0]
+    assert "positive catalyst or clearly aligned momentum" in capture.prompts[0]
+
+
+def test_entry_policy_uses_supplied_strategy_instead_of_hardcoded_levels():
+    state = _decision_state()
+    state["lstm_signal_context"]["strategy_contract"].update(
+        decision_target_pct=0.02, stop_loss_pct=-0.03, maximum_horizon_exchange_sessions=5,
+    )
+    prompt = get_data_quality_instruction(state)
+    assert "+2.00% before -3.00%" in prompt
+    assert "5 exchange sessions, even before a full trend reversal" in prompt
+
+
+@pytest.mark.parametrize("action,assessment,limitation,missing,forecast", [
+    ("Buy", "SUPPORTED", "NONE", [], []),
+    ("Sell", "REJECTED", "NONE", [], []),
+    ("Hold", "INSUFFICIENT_EVIDENCE", "MISSING_INPUTS", ["Current OHLC is absent; cannot assess support."], []),
+    ("Hold", "INSUFFICIENT_EVIDENCE", "FORECAST_UNCERTAINTY", [], ["Support is tested but target-first versus stop-first remains unresolved."]),
+    ("Hold", "INSUFFICIENT_EVIDENCE", "BOTH", ["Event timing is unverified."], ["The short-term path remains mixed."]),
+])
+def test_structured_decision_chain_preserves_actions_and_distinct_reasons(action, assessment, limitation, missing, forecast):
+    state = _decision_state()
+    evidence = dict(evidence_limitation=EvidenceLimitation(limitation), missing_inputs=missing, forecast_uncertainty=forecast)
+    plan = ResearchPlan(recommendation=action, rationale="Dated market evidence assessed.", strategic_actions="Evaluate the new entry.", **evidence)
+    proposal = TraderProposal(action=action, reasoning="Weigh target versus stop within the horizon.", lstm_thesis_assessment=assessment, **evidence)
+    decision = PortfolioDecision(rating=action, executive_summary="New long entry decision.", investment_thesis="Dated market evidence assessed.", lstm_thesis_assessment=assessment, **evidence)
+    for factory, obj, field, renderer in [
+        (research_manager.create_research_manager, plan, "investment_plan", render_research_plan),
+        (trader.create_trader, proposal, "trader_investment_plan", render_trader_proposal),
+        (portfolio_manager.create_portfolio_manager, decision, "final_trade_decision", render_pm_decision),
+    ]:
+        llm = Mock()
+        llm.with_structured_output.return_value.invoke.return_value = obj
+        result = factory(llm)(state)
+        state.update(result)
+        assert result[field] == renderer(obj)
+        assert f"**Evidence Limitation**: {limitation}" in result[field]
+        assert "**Missing Inputs**: " + ("; ".join(missing) or "None") in result[field]
+        assert "**Forecast Uncertainty**: " + ("; ".join(forecast) or "None") in result[field]
+        assert result["data_quality_tags"] == []
+        llm.with_structured_output.return_value.invoke.assert_called_once()
+        llm.invoke.assert_not_called()
 
 
 def test_fixed_levels_training_semantics_and_custom_targets():

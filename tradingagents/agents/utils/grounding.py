@@ -39,7 +39,7 @@ def find_current_evidence_issues(text: str, state: dict) -> list[str]:
     model = r"\b(?:lstm|model|score|rank(?:ing)?|feature|geometry|quantitative prior)\b"
     proof = r"\b(?:confirms?|validates?|proves?|guarantees?|establishes?)\b"
     market_truth = r"intact|exhaustion|institutional|absorption|structural failure|non-destructive|uptrend|not occurring|trend breakdown"
-    negation = r"\b(?:cannot|can't|doesn't|does not|not|no evidence to|insufficient evidence to)\s+(?:by itself\s+)?(?:confirm|validate|prove|guarantee|establish)\b"
+    negation = r"\b(?:cannot|can't|doesn't|does not|not|no evidence to|insufficient evidence to)\s+(?:(?:by itself|itself|alone|necessarily)\s+)?(?:confirm|validate|prove|guarantee|establish)\b"
     aliases = [
         (r"(?:five[- ](?:day|session)|5[- ]?(?:d|day|session)) return", "return_5d", 100),
         (r"(?:twenty[- ](?:day|session)|20[- ]?(?:d|day|session)) return", "return_20d", 100),
@@ -95,9 +95,14 @@ def find_current_evidence_issues(text: str, state: dict) -> list[str]:
             tolerance = 0.5 * 10 ** (-len(price[1].split(".")[1]) if price and "." in price[1] else 0)
             if price and not math.isclose(float(price[1].replace(",", "")), levels[name + "_price"], abs_tol=tolerance + 1e-8):
                 issues.append(f"FIXED_LEVEL_CONFLICT: {name} price={levels[name + '_price']:.4f}: {clause}")
-            distance = re.search(rf"\b{name}(?: distance)?\b.{{0,65}}?([\d.]+)\s*ATRs?\b", clause, re.I)
-            if distance and not math.isclose(float(distance[1]), levels[name + "_distance_atr"], abs_tol=0.06):
-                issues.append(f"ATR_DISTANCE_CONFLICT: {name}={levels[name + '_distance_atr']:.4f} ATR: {clause}")
+            # Do not associate a stop mention with a later target's ATR value (or vice versa).
+            distances = re.finditer(
+                rf"\b{name}(?: distance)?\b(?:(?!\b(?:target|stop)\b).){{0,65}}?"
+                r"(\d+(?:\.\d+)?)\s*ATRs?\b", clause, re.I,
+            )
+            for distance in distances:
+                if not math.isclose(float(distance[1]), levels[name + "_distance_atr"], abs_tol=0.06):
+                    issues.append(f"ATR_DISTANCE_CONFLICT: {name}={levels[name + '_distance_atr']:.4f} ATR: {clause}")
         if re.search(r"target.{0,100}(?:maps? directly|mapped directly|coincides|equals).{0,50}MA20/MA50", clause, re.I):
             ma20, ma50 = values["sma20"], values["sma50"]
             if all(abs(levels["target_price"] / value - 1) > 0.01 for value in (ma20, ma50) if value > 0):
