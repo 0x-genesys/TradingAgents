@@ -8,6 +8,11 @@ from stockstats import wrap
 from typing import Annotated
 import os
 from .config import get_config
+from .local_ohlc_cache import (
+    configured_required_session,
+    load_local_ohlcv,
+    yahoo_frame_needs_fallback,
+)
 from .utils import safe_ticker_component
 
 logger = logging.getLogger(__name__)
@@ -71,6 +76,8 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
         f"{safe_symbol}-YFin-data-{start_str}-{end_str}.csv",
     )
 
+    required_session = configured_required_session()
+
     if os.path.exists(data_file):
         data = pd.read_csv(data_file, on_bad_lines="skip", encoding="utf-8")
     else:
@@ -86,6 +93,20 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
         data.to_csv(data_file, index=False, encoding="utf-8")
 
     data = _clean_dataframe(data)
+    if yahoo_frame_needs_fallback(data, required_session):
+        fallback = load_local_ohlcv(
+            symbol,
+            curr_date=curr_date,
+            required_session=required_session,
+        )
+        if fallback is not None:
+            logger.warning(
+                "Using validated local OHLC cache for %s indicators "
+                "(required_session=%s)",
+                symbol,
+                required_session.date() if required_session is not None else "none",
+            )
+            data = fallback
 
     # Filter to curr_date to prevent look-ahead bias in backtesting
     data = data[data["Date"] <= curr_date_dt]

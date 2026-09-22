@@ -4,6 +4,12 @@ from dateutil.relativedelta import relativedelta
 import pandas as pd
 import yfinance as yf
 import os
+from .local_ohlc_cache import (
+    configured_required_session,
+    load_local_ohlcv,
+    local_cache_source_note,
+    yahoo_frame_needs_fallback,
+)
 from .stockstats_utils import StockstatsUtils, _clean_dataframe, yf_retry, load_ohlcv, filter_financials_by_date
 
 def get_YFin_data_online(
@@ -21,15 +27,28 @@ def get_YFin_data_online(
     # Fetch historical data for the specified date range
     data = yf_retry(lambda: ticker.history(start=start_date, end=end_date))
 
-    # Check if data is empty
-    if data.empty:
-        return (
-            f"No data found for symbol '{symbol}' between {start_date} and {end_date}"
-        )
-
     # Remove timezone info from index for cleaner output
-    if data.index.tz is not None:
+    if not data.empty and data.index.tz is not None:
         data.index = data.index.tz_localize(None)
+
+    required_session = configured_required_session()
+    if yahoo_frame_needs_fallback(data, required_session):
+        fallback = load_local_ohlcv(
+            symbol.upper(),
+            start_date=start_date,
+            end_date=end_date,
+            required_session=required_session,
+        )
+        if fallback is not None:
+            data = fallback.set_index("Date")
+            source_note = local_cache_source_note(required_session)
+        else:
+            return (
+                f"No complete Yahoo or local-cache data found for symbol '{symbol}' "
+                f"between {start_date} and {end_date}"
+            )
+    else:
+        source_note = "# Data source: Yahoo Finance\n"
 
     # Round numerical values to 2 decimal places for cleaner display
     numeric_columns = ["Open", "High", "Low", "Close", "Adj Close"]
@@ -45,7 +64,7 @@ def get_YFin_data_online(
     header += f"# Total records: {len(data)}\n"
     header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 
-    return header + csv_string
+    return header + source_note + "\n" + csv_string
 
 def get_stock_stats_indicators_window(
     symbol: Annotated[str, "ticker symbol of the company"],
