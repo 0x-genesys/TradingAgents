@@ -686,6 +686,10 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
     save_path.mkdir(parents=True, exist_ok=True)
     sections = []
 
+    if final_state.get("market_regime_report"):
+        sections.append(final_state["market_regime_report"])
+        (save_path / "market_regime.md").write_text(final_state["market_regime_report"], encoding="utf-8")
+
     # 1. Analysts
     analysts_dir = save_path / "1_analysts"
     analyst_parts = []

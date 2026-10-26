@@ -76,6 +76,10 @@ def find_current_evidence_issues(text: str, state: dict) -> list[str]:
                 continue
             pattern = rf"(?<!/)\b{alias}\b\s*(?:(?:is|at|of|=|:|reading of)\s*)?([+-]?\d[\d,]*(?:\.\d+)?)"
             for match in re.finditer(pattern, clause, re.I):
+                if state.get("market_regime_validation") and re.search(
+                    r"(?:universe|market[- ]regime|mean)\s+(?:mean\s+)?$", clause[:match.start()], re.I,
+                ):
+                    continue
                 if key in {"sma20", "sma50", "sma200"} and re.match(r"\s*[x%]", clause[match.end():], re.I):
                     continue
                 actual = float(match.group(1).replace(",", ""))
@@ -110,18 +114,60 @@ def find_current_evidence_issues(text: str, state: dict) -> list[str]:
     return list(dict.fromkeys(issues))
 
 
+def find_regime_evidence_issues(text: str, state: dict) -> list[str]:
+    """Check explicitly named supplied universe metrics, not arbitrary forecasts."""
+    validation = state.get("market_regime_validation") or {}
+    if validation.get("status") not in ("COMPLETE", "PARTIAL"):
+        return []
+    context = state["market_regime_context"]
+    aliases = {
+        "mean_return_5d": r"mean_return_5d|(?:universe|market[- ]regime)\s+mean\s+(?:5[- ]day|five[- ]session)\s+return",
+        "mean_return_20d": r"mean_return_20d|(?:universe|market[- ]regime)\s+mean\s+(?:20[- ]day|twenty[- ]session)\s+return",
+        "above_sma50_fraction": r"above_sma50_fraction|(?:universe|market[- ]regime)\s+(?:fraction|breadth)\s+above\s+SMA50",
+        "above_sma200_fraction": r"above_sma200_fraction|(?:universe|market[- ]regime)\s+(?:fraction|breadth)\s+above\s+SMA200",
+    }
+    issues = []
+    for clause in _clauses(text):
+        if re.match(r"(?:if|suppose|assuming|hypothetically)\b", clause, re.I):
+            continue
+        for key, alias in aliases.items():
+            expected = context["values"].get(key)
+            if expected is None:
+                continue
+            pattern = rf"\b(?:{alias})\b\s*(?:(?:is|at|of|=|:)\s*)?([+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?)(\s*%)?"
+            for match in re.finditer(pattern, clause, re.I):
+                actual = float(match[1])
+                scale = 100 if match[2] else 1
+                decimals = len(match[1].split(".")[1]) if "." in match[1] and "e" not in match[1].lower() else 0
+                tolerance = 0.5 * 10 ** -decimals if match[2] else 1e-8
+                if not math.isclose(actual, expected * scale, abs_tol=tolerance + 1e-8):
+                    issues.append(
+                        f"REGIME_NUMERIC_CONFLICT: {key}={expected} (fraction) as of "
+                        f"{context['data_date']}; reconcile dated universe sources: {clause}"
+                    )
+    return list(dict.fromkeys(issues))
+
+
+def _explicit_actions(text: str) -> dict[str, str]:
+    return {label.lower(): value.lower() for label, value in re.findall(
+        r"(?:\*\*)?\b(Rating|Action|Recommendation|FINAL TRANSACTION PROPOSAL)(?:\*\*)?"
+        r"\s*:\s*(?:\*\*)?(Buy|Hold|Sell|Overweight|Underweight)\b", text, re.I,
+    )}
+
+
 def decision_grounding_issues(text: str, state: dict) -> list[str]:
     return list(dict.fromkeys(
         find_unsupported_optional_source_claims(text, state)
         + find_unsupported_upstream_claims(text, state)
         + find_trade_arithmetic_issues(text, state)
         + find_current_evidence_issues(text, state)
+        + find_regime_evidence_issues(text, state)
     ))
 
 
 def repair_decision_grounding(draft, state, prompt, structured_llm, llm, render, agent_name):
     """Request at most one complete correction; retain the model's final action."""
-    if not state.get("lstm_signal_context") and agent_name != "Portfolio Manager":
+    if not state.get("lstm_signal_context") and not state.get("market_regime_validation") and agent_name != "Portfolio Manager":
         return draft, []
     issues = decision_grounding_issues(draft, state)
     if not issues:
@@ -136,6 +182,11 @@ def repair_decision_grounding(draft, state, prompt, structured_llm, llm, render,
         "the final BUY/HOLD/SELL decision remains yours.\nIssues:\n- "
         + "\n- ".join(issues) + "\n\nPrevious draft:\n" + draft
     )
+    if state.get("market_regime_validation"):
+        instruction += (
+            "\nFor this bounded factual repair, preserve the original action/rating exactly. "
+            "Correct regime facts and uncertainty only; do not make a new trading decision."
+        )
     repair_prompt = (
         prompt + [{"role": "user", "content": instruction}]
         if isinstance(prompt, list) else prompt + "\n\n" + instruction
@@ -143,7 +194,14 @@ def repair_decision_grounding(draft, state, prompt, structured_llm, llm, render,
     repaired = invoke_structured_or_freetext(
         structured_llm, llm, repair_prompt, render, agent_name + " grounding repair",
     )
+    action_changed = bool(state.get("market_regime_validation")) and (
+        _explicit_actions(draft) != _explicit_actions(repaired)
+    )
+    if action_changed:
+        repaired = draft
     remaining = decision_grounding_issues(repaired, state)
+    if action_changed:
+        remaining.append("ACTION_CHANGE_REJECTED: factual repair changed the original decision; original draft retained")
     prefix = "FINAL" if agent_name == "Portfolio Manager" else agent_name.upper().replace(" ", "_")
     if remaining:
         repaired += "\n\n**Unresolved evidence issues** (validation, not a decision override):\n- " + "\n- ".join(remaining)

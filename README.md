@@ -283,6 +283,17 @@ render these fields; free-text fallbacks are instructed to use the same labels.
 Standalone/older responses may omit them. Factual grounding still requests at
 most one repair and records unresolved issues without forcing a decision.
 
+An optional `market_regime_context` argument adds dated inference-universe return
+and breadth facts to all four independent analysts. Downstream LSTM roles also
+receive the strategy caveat and reconcile entry support with the strongest
+contradictory evidence within the supplied horizon. Adverse regime facts are not
+an automatic HOLD or a requirement for confirmed reversal, catalyst, or relative
+strength. Invalid context is tagged unavailable without failing the run, while
+omission preserves existing behavior. The exact snapshot, effective validation,
+and rendered report persist in state and saved artifacts. See
+[the market-regime contract](docs/market-regime-context.md) for validation ownership,
+field names, optional structured assessments, and offline verification.
+
 For stocks, the News Analyst and Sentiment Analyst consume the same frozen Yahoo
 Finance and India-localized Google News blocks. The News Analyst does not run a
 second ticker-news search. It may fetch global news only for horizon-relevant

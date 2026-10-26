@@ -12,6 +12,7 @@ from tradingagents.agents.utils.lstm_context import (
     render_lstm_report,
     validate_lstm_signal_context,
 )
+from tradingagents.agents.utils.market_regime_context import market_regime_state
 
 
 class Propagator:
@@ -34,6 +35,7 @@ class Propagator:
         trade_strategy: Optional[str] = None,
         lstm_signal_context: Optional[Dict[str, Any]] = None,
         sentiment_source_snapshot: Optional[Dict[str, Any]] = None,
+        market_regime_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -103,7 +105,7 @@ class Propagator:
                 f"Objective: reach target before stop within the horizon"
             )
 
-        return {
+        state = {
             "messages": [("human", company_name)],
             "company_of_interest": company_name,
             "asset_type": asset_type,
@@ -153,6 +155,13 @@ class Propagator:
             ),
             "sentiment_source_snapshot": sentiment_source_snapshot or {},
         }
+        if market_regime_context is not None:
+            lstm_data_date = str(lstm_signal_context["signal"]["data_timestamp"]) if lstm_signal_context else None
+            state.update(market_regime_state(market_regime_context, str(trade_date), lstm_data_date))
+            status = state["market_regime_validation"]["status"]
+            if status != "COMPLETE":
+                state["data_quality_tags"].append(f"MARKET_REGIME_{status}")
+        return state
 
     def get_graph_args(self, callbacks: Optional[List] = None) -> Dict[str, Any]:
         """Get arguments for the graph invocation.

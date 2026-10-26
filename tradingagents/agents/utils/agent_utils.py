@@ -2,6 +2,7 @@ import re
 
 from langchain_core.messages import HumanMessage, RemoveMessage
 from tradingagents.agents.utils.entry_decision import get_entry_decision_instruction
+from tradingagents.agents.utils.market_regime_context import get_market_regime_instruction
 
 # Import tools from separate utility files
 from tradingagents.agents.utils.core_stock_tools import (
@@ -42,8 +43,9 @@ def get_language_instruction() -> str:
 def get_analyst_context(state: dict) -> str:
     """Project neutral dated facts and execution parameters, never model persuasion."""
     context = state.get("lstm_signal_context")
+    regime_note = state.get("market_regime_context_note", "")
     if not context:
-        return state.get("trade_context_note", "")
+        return "\n\n".join(filter(None, [state.get("trade_context_note", ""), regime_note]))
     from tradingagents.agents.utils.lstm_context import render_technical_snapshot
 
     signal = context["signal"]
@@ -56,6 +58,7 @@ def get_analyst_context(state: dict) -> str:
         "Assess target before stop from observed evidence. Establish trend and reversal "
         "independently; distinguish an observed reversal from future confirmation.\n"
         + render_technical_snapshot(context)
+        + ("\n\n" + regime_note if regime_note else "")
     )
 
 
@@ -300,7 +303,7 @@ def get_data_quality_instruction(state: dict) -> str:
             "let the gaps change the rating or BUY/HOLD/SELL decision. Base directional "
             "claims only on verified market, company-news, and fundamentals evidence."
         )
-    return instructions
+    return instructions + get_market_regime_instruction(state)
 
 
 def find_unsupported_upstream_claims(text: str, state: dict | None = None) -> list[str]:

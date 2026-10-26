@@ -68,9 +68,33 @@ class EvidenceLimitation(str, Enum):
     BOTH = "BOTH"
 
 
+class RegimeFitAssessment(str, Enum):
+    SUPPORTIVE = "SUPPORTIVE"
+    ADVERSE = "ADVERSE"
+    MIXED = "MIXED"
+    UNKNOWN = "UNKNOWN"
+
+
 class EntryEvidence(BaseModel):
     """Explicit uncertainty reasons; omitted for legacy/standalone responses."""
 
+    regime_fit_assessment: Optional[RegimeFitAssessment] = Field(
+        default=None,
+        description=(
+            "When market-regime context is supplied, assess its fit to the entry: "
+            "SUPPORTIVE, ADVERSE, MIXED, or UNKNOWN. UNKNOWN means unavailable facts. "
+            "This is not a calibrated probability or an automatic action rule. Omit otherwise."
+        ),
+    )
+    regime_fit_reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "When market-regime context is supplied, reconcile observed entry support "
+            "with the strongest contradictory evidence and why target before stop is "
+            "supported, unsupported, or unresolved within the supplied session horizon. "
+            "Separate missing facts from forecast uncertainty. Omit otherwise."
+        ),
+    )
     evidence_limitation: Optional[EvidenceLimitation] = Field(
         default=None,
         description=(
@@ -99,6 +123,10 @@ class EntryEvidence(BaseModel):
 
 def _render_evidence_limitations(evidence: EntryEvidence) -> list[str]:
     parts = []
+    if evidence.regime_fit_assessment is not None:
+        parts.extend(["", f"**Regime Fit Assessment**: {evidence.regime_fit_assessment.value}"])
+    if evidence.regime_fit_reason is not None:
+        parts.extend(["", f"**Regime Fit Reason**: {evidence.regime_fit_reason}"])
     if evidence.evidence_limitation is not None:
         parts.extend(["", f"**Evidence Limitation**: {evidence.evidence_limitation.value}"])
     for label, reasons in (

@@ -417,7 +417,8 @@ class TradingAgentsGraph:
                   stop_loss_pct: Optional[float] = None,
                   trade_strategy: Optional[str] = None,
                   lstm_signal_context: Optional[Dict[str, Any]] = None,
-                  sentiment_source_snapshot: Optional[Dict[str, Any]] = None):
+                  sentiment_source_snapshot: Optional[Dict[str, Any]] = None,
+                  market_regime_context: Optional[Dict[str, Any]] = None):
         """Run the trading agents graph for a company on a specific date.
 
         ``asset_type`` selects between the stock pipeline (default) and the
@@ -432,6 +433,11 @@ class TradingAgentsGraph:
         through to all analysts
         so they can frame their analysis for the specific trade horizon. When
         omitted (None), the default long-term analysis is used unchanged.
+
+        ``market_regime_context`` optionally supplies dated universe facts.
+        Invalid snapshots are tagged unavailable, never a run failure or action
+        override. The producer verifies the previous NSE session and source hash;
+        TA checks shapes, dates, and consistency with supplied LSTM market data.
         """
         self.ticker = company_name
 
@@ -466,6 +472,7 @@ class TradingAgentsGraph:
                 trade_strategy=trade_strategy,
                 lstm_signal_context=lstm_signal_context,
                 sentiment_source_snapshot=sentiment_source_snapshot,
+                market_regime_context=market_regime_context,
             )
         finally:
             if self._checkpointer_ctx is not None:
@@ -509,7 +516,8 @@ class TradingAgentsGraph:
                    stop_loss_pct: Optional[float] = None,
                    trade_strategy: Optional[str] = None,
                    lstm_signal_context: Optional[Dict[str, Any]] = None,
-                   sentiment_source_snapshot: Optional[Dict[str, Any]] = None):
+                   sentiment_source_snapshot: Optional[Dict[str, Any]] = None,
+                   market_regime_context: Optional[Dict[str, Any]] = None):
         """Execute the graph and write the resulting state to disk and memory log."""
         source_snapshot = self.resolve_source_snapshot(
             company_name,
@@ -533,6 +541,7 @@ class TradingAgentsGraph:
             trade_strategy=trade_strategy,
             lstm_signal_context=lstm_signal_context,
             sentiment_source_snapshot=source_snapshot,
+            market_regime_context=market_regime_context,
         )
         args = self.propagator.get_graph_args()
 
@@ -656,6 +665,11 @@ class TradingAgentsGraph:
                 "sentiment_source_snapshot", {}
             ),
         }
+
+        for key in ("market_regime_context", "market_regime_validation",
+                    "market_regime_context_note", "market_regime_report"):
+            if key in final_state:
+                self.log_states_dict[str(trade_date)][key] = final_state[key]
 
         # Save to file. Reject ticker values that would escape the
         # results directory when joined as a path component.
